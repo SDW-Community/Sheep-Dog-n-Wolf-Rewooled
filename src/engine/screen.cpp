@@ -107,14 +107,23 @@ void Screen::Clear(u32 color)
 }
 
 /* the PS1-style projection distance: horizontal fov from tan = 256 / dist, aspect = width / height, and
- * the projection matrix (y flipped) pushed to the device. */
+ * the projection matrix (y flipped) pushed to the device.
+ * Hor+: the game fixes the horizontal fov, so a screen wider than 4:3 would show less height. There the tangent is
+ * widened by (width / height) / (4 / 3), which keeps the 4:3 view's height and adds width at the sides; at 4:3 or
+ * narrower it is the game's. The visibility tests (Instance_UpdateVisibility, Cull_IsAabbVisible) read the same
+ * tanHalfFov, so objects are kept exactly as far out as the screen shows. projDist stays as the camera set it, so a
+ * view saved and set back is not widened twice. Every change of view comes through here. */
 void Screen::SetProjection(s32 dist)
 {
     float tanHalf;
+    float aspect;
     projDist = dist;
     tanHalf = 512.0f / (projDist * 2.0f);
+    aspect = g_pViewFrustum->viewportWidth / g_pViewFrustum->viewportHeight;
+    if (aspect > 4.0f / 3.0f)
+        tanHalf *= aspect / (4.0f / 3.0f);
     g_pViewFrustum->SetFovFromTan(tanHalf);
-    g_pViewFrustum->aspect = g_pViewFrustum->viewportWidth / g_pViewFrustum->viewportHeight;
+    g_pViewFrustum->aspect = aspect;
     g_pViewFrustum->BuildProjectionMatrix(&g_projMatrix);
     g_projMatrix.m[1][1] = -g_projMatrix.m[1][1];
     g_pD3DAppMain->SetTransform(D3DTRANSFORMSTATE_PROJECTION, &g_projMatrix);
