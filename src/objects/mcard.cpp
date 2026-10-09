@@ -709,6 +709,7 @@ u8 MCard_SlotChooserConfirmSave()
 /* Card_DrawScreen: the four slot thumbnails */
 void Card_DrawScreen()
 {
+    HudElement hud(HudElement::Centre, HudElement::Centre, Text_ElementCentre);
     struct Work {
         float right, top, left, bottom;
         u16 unused, index, icon;

@@ -1,5 +1,6 @@
 
 #include "sdw_types.h"
+#include "../engine/screen.h"
 #include "sdw_enums.h"
 #include "scenaric_props.h"
 class Instance;
@@ -177,6 +178,7 @@ void InstantHoover::Update()
 }
 void InstantHoover::DrawHud()
 {
+    HudElement hud(HudElement::Start, HudElement::End);
     s16 top = ScreenHeightS32() - 50;
     g_spriteCrayon2.Draw(g_screenLayerBase0 + 9, 10, top, 110, top + 40, hudTint, 0);
     if (martianCount - capturedCount > 9) {

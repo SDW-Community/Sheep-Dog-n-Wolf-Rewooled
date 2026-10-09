@@ -1443,6 +1443,7 @@ void Menu_ShowMessageBox(const char *text, u8 align, s32 durationMs)
  * in real milliseconds; releases the menu when it runs out. */
 void Menu_DrawMessageBox()
 {
+    HudElement hud(HudElement::Centre, HudElement::Centre, HudElement::CentreRect, g_msgBoxRect);
     u32 color;
     u16 strip;
     struct {

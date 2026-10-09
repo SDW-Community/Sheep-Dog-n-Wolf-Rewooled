@@ -276,6 +276,7 @@ void Map::InitObject()
 
 void Map_Update()
 {
+    HudElement hud(HudElement::Stretch);
     g_map.UpdateState();
 }
 

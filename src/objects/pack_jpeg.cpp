@@ -161,6 +161,7 @@ void PackJpeg::ReleaseImage()
 
 void PackJpeg::DrawImage()
 {
+    HudElement hud(HudElement::Stretch);
     struct Work {
         float scale, u;
         u32 color;

@@ -341,6 +341,8 @@ void StringBank_RandomiseGlyphs()
 /* a boxed, vertically centred text: dark panel 4 px larger than rect (default g_subtitleRect), frame, text. */
 void Ui_DrawSubtitleBox(const char *text, const s16 *rect, u16 frameStyle)
 {
+    HudElement hud(HudElement::Centre, HudElement::Centre, HudElement::CentreRect,
+                   rect ? rect : g_subtitleRect);
     u32 rgb = 0x80808;
     s16 box[4];
     if (!rect)
@@ -429,6 +431,7 @@ void Dialogue_StartVoice(s32 voiceId, ScnObject *speaker)
  * letterbox is in; 0 when the text is done (and closes the box), else the run result + the letterbox state. */
 u8 Dialogue_Show(void *text, s32 arg)
 {
+    HudElement hud(HudElement::Centre, HudElement::End, Text_ElementCentre);
     g_dialogueShownFlags.bits.shown = 0;
     if (text != g_dialogueCurText) {
         g_dialogueCurText = text;
@@ -524,6 +527,7 @@ void ScrollText::ScrollList_Update(s8 dir)
 /* the "more below" arrow, then the visible part of the text. */
 void ScrollText::Draw(u8 layerIndex, u8 align)
 {
+    HudElement hud(HudElement::Centre, HudElement::Centre, HudElement::CentreRect, rect);
     if (topLine < maxTopLine)
         Dialogue_DrawArrow(g_screenLayerBase + layerIndex, rect[0] + rect[2] / 2, rect[1] + rect[3] - 2, 0x808080,
                            SPRFLIP_UV_ROT180);
@@ -1405,6 +1409,7 @@ void Ui_DrawFrameQuads(UiFrame *frame, s32 unused)
  * three-row yes/no confirm menu fit the window, run the confirm menu and latch its choice. */
 void Ui_DrawTextBox(TextBox *box, u16 lineCount)
 {
+    HudElement hud(HudElement::Centre, HudElement::Centre, HudElement::CentreRect, box->rect);
     u16 rows;
     s16 frame[4];
 
@@ -1436,6 +1441,7 @@ void Ui_DrawTextBox(TextBox *box, u16 lineCount)
  * its cursor row. */
 void Ui_DrawMenuBox(MenuBox *box)
 {
+    HudElement hud(HudElement::Centre, HudElement::Centre, HudElement::CentreRect, box->rect);
     u16 rows;
     s16 frame[4];
     u16 textLines;
@@ -1615,6 +1621,7 @@ void Fade_DrawOverlay(bool white, u8 level, s16 *rect)
  * four corners and centred, at 1.5x (or 1.0x with the depth pulled forward), and black bars over the rest. */
 void Hud_DrawTelescopeMask(bool smallScale)
 {
+    HudElement hud(HudElement::Centre, HudElement::Centre, HudElement::CentreScreen);
     s32 nY0;
     s32 pX0;
     s32 curH;
@@ -1683,14 +1690,15 @@ void Hud_DrawTelescopeMask(bool smallScale)
         nY0 = theI == 3 ? (s16)g_telescopeOriginY + g_telescopeTileH * 2 : 0;
         curW = theI <= 1 ? g_telescopeOriginX : g_telescopeTileW * 4;
         curH = theI <= 1 ? ScreenHeightU16() : g_telescopeOriginY;
-        Draw2D_FlatRect(nZ, g_screen.ScaleX(pX0), g_screen.ScaleY(nY0), g_screen.ScaleX(pX0 + curW),
-                        g_screen.ScaleY(nY0 + curH), black, 0);
+        Draw2D_FlatRect(nZ, HudElement::EdgeX(pX0), HudElement::EdgeY(nY0), HudElement::EdgeX(pX0 + curW),
+                        HudElement::EdgeY(nY0 + curH), black, 0);
     }
 }
 
 /* the cannon-sight overlay (class CanonSimple): a 2x2 mosaic of the mask tile at 2x, mirrored, centred. */
 void Hud_DrawCannonMask()
 {
+    HudElement hud(HudElement::Centre, HudElement::Centre, HudElement::CentreScreen);
     DavBitmapRec *theBitmaps;
     s32 curI;
     s16 bm[4]; /* {u, v, width, height} of the tile's bitmap */
@@ -1758,6 +1766,7 @@ void Ui_DrawGouraudRect(u32 *layer, s32 x0, s32 y0, s32 x1, s32 y1, u32 c0, u32 
 /* a one-pixel outline just outside rect, as eight triangles; the pixel is at least 1.0 screen unit. */
 void Ui_DrawRectOutline(s16 *rect, u32 color)
 {
+    HudElement hud(HudElement::Centre, HudElement::Centre, HudElement::CentreRect, rect);
     float left;
     float curZ;
     float top;
@@ -1766,10 +1775,10 @@ void Ui_DrawRectOutline(s16 *rect, u32 color)
     float myBottom;
     float curPixelW;
     float theRight;
-    curPixelW = g_screen.ScaleX(1);
+    curPixelW = HudElement::SizeX(1);
     if (curPixelW < 1.0f)
         curPixelW = 1.0f;
-    pixelH = g_screen.ScaleY(1);
+    pixelH = HudElement::SizeY(1);
     if (pixelH < 1.0f)
         pixelH = 1.0f;
     left = g_screen.ScaleX(rect[0]);
