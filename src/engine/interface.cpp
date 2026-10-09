@@ -1287,8 +1287,8 @@ void Ui_DrawPanelFill(u32 color, s16 *rect)
     texs->Surface_Unlock();
     delete desc;
     z = 0.058333333f;
-    Draw2D_TexRect(z, x0n, y0, x1p, y1p, g_pPolyBin->texturePageCount - 2, 1.0f, 1.0f, 0x888, 1.0f, 1.0f, 0x888, 1.0f,
-                   1.0f, 0x888, 1.0f, 1.0f, 0x888);
+    Draw2D_TexRect(z, x0n, y0, x1p, y1p, g_pPolyBin->texturePageCount - 2, 1.0f, 1.0f, 0x808080, 1.0f, 1.0f, 0x808080,
+                   1.0f, 1.0f, 0x808080, 1.0f, 1.0f, 0x808080);
 }
 
 /* build the four border strips of a box frame around rect {x, y, w, h} from the frame bitmap frameResId,
@@ -1538,10 +1538,10 @@ void Letterbox_Update()
         }
         theTex->Surface_Unlock();
         delete desc;
-        Draw2D_TexRect(curZ, 0, 0, theWidth, nBarHf, g_pPolyBin->texturePageCount - 3, 1.0f, 1.0f, 0x888, 1.0f, 1.0f,
-                       0x888, 1.0f, 1.0f, 0x888, 1.0f, 1.0f, 0x888);
+        Draw2D_TexRect(curZ, 0, 0, theWidth, nBarHf, g_pPolyBin->texturePageCount - 3, 1.0f, 1.0f, 0x808080, 1.0f, 1.0f,
+                       0x808080, 1.0f, 1.0f, 0x808080, 1.0f, 1.0f, 0x808080);
         Draw2D_TexRect(curZ, 0, nHeight - nBarHf, theWidth, nHeight, g_pPolyBin->texturePageCount - 3, 1.0f, 1.0f,
-                       0x888, 1.0f, 1.0f, 0x888, 1.0f, 1.0f, 0x888, 1.0f, 1.0f, 0x888);
+                       0x808080, 1.0f, 1.0f, 0x808080, 1.0f, 1.0f, 0x808080, 1.0f, 1.0f, 0x808080);
     }
     if (!(g_gameFlags & GF_LETTERBOX)) {
         g_dialogueCurText = 0;
@@ -1613,8 +1613,8 @@ void Fade_DrawOverlay(bool white, u8 level, s16 *rect)
     tex->Surface_Unlock();
     delete curDesc;
     curZ = 0.0083333338f;
-    Draw2D_TexRect(curZ, left, top, theRight, nBottom, g_pPolyBin->texturePageCount - 1, 1.0f, 1.0f, 0x888, 1.0f, 1.0f,
-                   0x888, 1.0f, 1.0f, 0x888, 1.0f, 1.0f, 0x888);
+    Draw2D_TexRect(curZ, left, top, theRight, nBottom, g_pPolyBin->texturePageCount - 1, 1.0f, 1.0f, 0x808080, 1.0f, 1.0f,
+                   0x808080, 1.0f, 1.0f, 0x808080, 1.0f, 1.0f, 0x808080);
 }
 
 /* the telescope overlay (class Telescope): a 4x2 mosaic of the outer and inner mask tiles, mirrored into the

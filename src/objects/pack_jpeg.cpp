@@ -167,7 +167,7 @@ void PackJpeg::DrawImage()
         u32 color;
         float bottom, v, right, midY, midX, top, left;
     } w;
-    w.color = 0xffffff;
+    w.color = 0x808080;
     w.top = 0;
     w.bottom = g_pViewFrustum->viewportHeight - g_screen.ScaleY(g_pCurFont->glyphHeight) * 2;
     w.left = (1.0f - (float)image->width / (float)image->height) * g_pViewFrustum->viewportWidth * 0.5f;
