@@ -1296,7 +1296,7 @@ public:
     u16 ReadU16(u8 advance);
     u32 ReadU32(u8 advance);
     u32 ReadU24BE(u8 advance);
-    u32 ReadRgbHalved(u8 advance);
+    u32 ReadRgbExpanded(u8 advance);
     void WriteU8(u8 value, u8 advance);
     void WriteU16(u16 value, u8 advance);
     void WriteU32(u32 value, u8 advance);
@@ -1335,7 +1335,7 @@ public:
     SDW_MEMBERS_BsPolyBlendFlat
 #endif
     virtual ~BsPolyBlendFlat();                       // BsPolyBlendFlat_VectorDeletingDtor
-    u32 colour;                                    // flat colour from BsFile_ReadRgbHalved (BsDecode_Kind10_11)
+    u32 colour;                                    // flat colour from BsFile_ReadRgbExpanded (BsDecode_Kind10_11)
     u32 blendMode;                                 // a u32 read straight from the file (BsDecode_Kind10_11); RenderPoly_InitFromBsBlendFlat swit
 };
 
@@ -1345,7 +1345,7 @@ public:
     SDW_MEMBERS_BsPolyBlendGouraud
 #endif
     virtual ~BsPolyBlendGouraud();                    // BsPolyBlendGouraud_VectorDeletingDtor
-    u32 colour[3];                                 // per-vertex colours from BsFile_ReadRgbHalved (BsDecode_Kind12)
+    u32 colour[3];                                 // per-vertex colours from BsFile_ReadRgbExpanded (BsDecode_Kind12)
     u32 blendMode;                                 // a u32 read straight from the file (BsDecode_Kind12); RenderPoly_InitFromBsBlendGouraud swit
 };
 
@@ -1355,7 +1355,7 @@ public:
     SDW_MEMBERS_BsPolyFlat
 #endif
     virtual ~BsPolyFlat();                            // BsPolyFlat_VectorDeletingDtor
-    u32 colour;                                    // flat colour from BsFile_ReadRgbHalved, stored
+    u32 colour;                                    // flat colour from BsFile_ReadRgbExpanded, stored
 };
 
 class BsPolyGouraud : public PolyTri {
@@ -1364,7 +1364,7 @@ public:
     SDW_MEMBERS_BsPolyGouraud
 #endif
     virtual ~BsPolyGouraud();                         // BsPolyGouraud_VectorDeletingDtor
-    u32 colour[3];                                 // per-vertex colours from BsFile_ReadRgbHalved: BsDecode_Kind2_3 stores them at +0x10/+0x14/+0x18 of a
+    u32 colour[3];                                 // per-vertex colours from BsFile_ReadRgbExpanded: BsDecode_Kind2_3 stores them at +0x10/+0x14/+0x18 of a
 };
 
 class BsPolyTexFlat : public PolyTri {
@@ -8289,9 +8289,9 @@ struct WarHeader {
 public:
     u8 _pad000[0x4];
     char version[4];                               // 'V2.6'. Load_WAR prefix-compares it with sprintf('V%u.%u', 2, 6), temporarily NUL-ing +8. The same m
-    u8 clearR;                                     // red of the level clear/fog colour. Load_DAVnWAR builds (r>>1)<<16 | (g>>1)<<8 | (b>>1) and passes it
-    u8 clearG;                                     // green of the clear/fog colour (halved at use)
-    u8 clearB;                                     // blue of the clear/fog colour (halved at use)
+    u8 clearR;                                     // red of the level clear/fog colour; Load_DAVnWAR expands the whole RGB by 1.03
+    u8 clearG;                                     // green of the clear/fog colour
+    u8 clearB;                                     // blue of the clear/fog colour
     u32 resourceCount;                             // number of u32 entries in the table at +0x10; the loop bound of Load_WAR, Load_WarMeshes and every Lo
 };
 

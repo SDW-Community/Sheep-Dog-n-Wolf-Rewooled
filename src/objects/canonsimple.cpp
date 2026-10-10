@@ -1,5 +1,6 @@
 
 #include "sdw_types.h"
+#include "../engine/screen.h"
 #include "sdw_enums.h"
 #include "scenaric_props.h"
 #define SDW_MEMBERS_ScnObject                           \
@@ -229,14 +230,17 @@ void CanonSimple::UpdateAim(Pad *pad)
                     x = 0;
                     horizontal = 0;
                     vertical = 0;
-                    Ui_DrawFlatRect(g_screenLayerBase, (ScreenWidthS32() >> 1) - 7, (ScreenHeightS32() >> 1) - 1,
-                                    (ScreenWidthS32() >> 1) - 3, (ScreenHeightS32() >> 1) + 1, 0xffffff);
-                    Ui_DrawFlatRect(g_screenLayerBase, (ScreenWidthS32() >> 1) + 3, (ScreenHeightS32() >> 1) - 1,
-                                    (ScreenWidthS32() >> 1) + 7, (ScreenHeightS32() >> 1) + 1, 0xffffff);
-                    Ui_DrawFlatRect(g_screenLayerBase, (ScreenWidthS32() >> 1) - 1, (ScreenHeightS32() >> 1) - 5,
-                                    (ScreenWidthS32() >> 1) + 1, (ScreenHeightS32() >> 1) - 2, 0xffffff);
-                    Ui_DrawFlatRect(g_screenLayerBase, (ScreenWidthS32() >> 1) - 1, (ScreenHeightS32() >> 1) + 2,
-                                    (ScreenWidthS32() >> 1) + 1, (ScreenHeightS32() >> 1) + 5, 0xffffff);
+                    {
+                        HudElement hud(HudElement::Centre, HudElement::Centre, HudElement::CentreScreen);
+                        Ui_DrawFlatRect(g_screenLayerBase, (ScreenWidthS32() >> 1) - 7, (ScreenHeightS32() >> 1) - 1,
+                                        (ScreenWidthS32() >> 1) - 3, (ScreenHeightS32() >> 1) + 1, 0xffffff);
+                        Ui_DrawFlatRect(g_screenLayerBase, (ScreenWidthS32() >> 1) + 3, (ScreenHeightS32() >> 1) - 1,
+                                        (ScreenWidthS32() >> 1) + 7, (ScreenHeightS32() >> 1) + 1, 0xffffff);
+                        Ui_DrawFlatRect(g_screenLayerBase, (ScreenWidthS32() >> 1) - 1, (ScreenHeightS32() >> 1) - 5,
+                                        (ScreenWidthS32() >> 1) + 1, (ScreenHeightS32() >> 1) - 2, 0xffffff);
+                        Ui_DrawFlatRect(g_screenLayerBase, (ScreenWidthS32() >> 1) - 1, (ScreenHeightS32() >> 1) + 2,
+                                        (ScreenWidthS32() >> 1) + 1, (ScreenHeightS32() >> 1) + 5, 0xffffff);
+                    }
                     dpadRepeatMs += g_dtMs;
                     stickRepeatMs += g_dtMs;
                     if (pad->cur.typeLen.type == PADTYPE_ANALOG) {

@@ -667,8 +667,8 @@ inline void PolyBatcher::SubmitPolyTinted(RenderPoly *poly)
     }
 }
 
-/* Mesh_DrawImmediate with every face's colour pulled towards tintColor by tintBlend (Color_Lerp; a flat face
- * towards half the tint), drawn from a scratch copy so the mesh keeps its own colours. The faces go to g_pPolyBin:
+/* Mesh_DrawImmediate with every face's colour pulled towards tintColor by tintBlend (Color_Lerp),
+ * drawn from a scratch copy so the mesh keeps its own colours. The faces go to g_pPolyBin:
  * the batcher argument is never read (its sibling has the same signature). Faces whose type has bit 0x8000
  * keep their colour. */
 void Mesh::DrawImmediateTinted(u32 tintColor, float tintBlend, PolyBatcher *batcher, Frustrum *cam)
@@ -689,7 +689,6 @@ void Mesh::DrawImmediateTinted(u32 tintColor, float tintBlend, PolyBatcher *batc
     u8 flip;
     void *lockPtr;
     u32 i;
-    u32 half_10;
     float viewH;
 
     viewW_15 = cam->viewportWidth;
@@ -697,7 +696,6 @@ void Mesh::DrawImmediateTinted(u32 tintColor, float tintBlend, PolyBatcher *batc
     invDist_14 = 1.0f / (cam->viewDistance);
     flip = cam->flipWinding;
     color_4 = tintColor & 0xffffff;
-    half_10 = color_4 >> 1 & 0x7f0000 | color_4 >> 1 & 0x7f00 | color_4 >> 1 & 0x7f;
     vbTransformed->Lock(DDLOCK_WAIT, &lockPtr, &lockSize_13);
     for (i = 0; i < faceCount; i++) {
         v0 = (XformedVertex *)lockPtr + faces[i].poly.idx[0];
@@ -737,9 +735,9 @@ void Mesh::DrawImmediateTinted(u32 tintColor, float tintBlend, PolyBatcher *batc
                 memcpy(flat_7 + 1, v1_3, 0x10);
                 memcpy(flat_7 + 2, v2_3, 0x10);
                 if ((poly_2.type & RPOLY_F_8000) == RPOLY_LINE) {
-                    flat_7[0].diffuse = Color_Lerp(flat_7[0].diffuse, half_10, tintBlend);
-                    flat_7[1].diffuse = Color_Lerp(flat_7[1].diffuse, half_10, tintBlend);
-                    flat_7[2].diffuse = Color_Lerp(flat_7[2].diffuse, half_10, tintBlend);
+                    flat_7[0].diffuse = Color_Lerp(flat_7[0].diffuse, color_4, tintBlend);
+                    flat_7[1].diffuse = Color_Lerp(flat_7[1].diffuse, color_4, tintBlend);
+                    flat_7[2].diffuse = Color_Lerp(flat_7[2].diffuse, color_4, tintBlend);
                 }
                 flat_7[0].specular = fog0_6;
                 flat_7[1].specular = fog1_6;
@@ -1238,7 +1236,7 @@ s32 Outline_CompareEdgeKey(const u32 *a, const u32 *b)
         return 1;
 }
 /* draws the mesh's faces through `batcher` tinted towards tintColor by tintBlend (0..1), fogged per vertex
- * by `cam`, then its outline in the half-bright tint (see the file header). outlineWidth < 0 (every caller passes
+ * by `cam`, then its outline in the same tint (see the file header). outlineWidth < 0 (every caller passes
  * -1.0f) means 0.7 pixels scaled by the projection and screen width; the width is multiplied by each end vertex's rhw
  * and clamped to 1.5..8. */
 void Mesh::Mesh_DrawOutlinedTinted(u32 tintColor, float tintBlend, PolyBatcher *batcher, Frustrum *cam,
@@ -1284,7 +1282,6 @@ void Mesh::Mesh_DrawOutlinedTinted(u32 tintColor, float tintBlend, PolyBatcher *
     u32 i_16;
     u32 v_6;
     s32 texIdx_29;
-    u32 halfTint_27;
     float viewH_26;
     float maxZ_26;
 
@@ -1298,7 +1295,6 @@ void Mesh::Mesh_DrawOutlinedTinted(u32 tintColor, float tintBlend, PolyBatcher *
     invFar_14 = 1.0f / (cam->viewDistance);
     flip_19 = cam->flipWinding;
     tint = tintColor & 0xffffff;
-    halfTint_27 = ((tint >> 1) & 0x7f0000) | ((tint >> 1) & 0x7f00) | ((tint >> 1) & 0x7f);
     vbTransformed->Lock(DDLOCK_WAIT, (void **)&verts_4, &lockSize);
     for (i_16 = 0; i_16 < faceCount; i_16++) {
         v0_28 = verts_4 + faces[i_16].poly.idx[0];
@@ -1340,9 +1336,9 @@ void Mesh::Mesh_DrawOutlinedTinted(u32 tintColor, float tintBlend, PolyBatcher *
                     memcpy(fv_12 + 1, v1_17, 0x10);
                     memcpy(fv_12 + 2, v2_17, 0x10);
                     if ((poly_12.type & RPOLY_F_8000) == RPOLY_LINE) {
-                        fv_12[0].diffuse = Color_Lerp(fv_12[0].diffuse, halfTint_27, tintBlend);
-                        fv_12[1].diffuse = Color_Lerp(fv_12[1].diffuse, halfTint_27, tintBlend);
-                        fv_12[2].diffuse = Color_Lerp(fv_12[2].diffuse, halfTint_27, tintBlend);
+                        fv_12[0].diffuse = Color_Lerp(fv_12[0].diffuse, tint, tintBlend);
+                        fv_12[1].diffuse = Color_Lerp(fv_12[1].diffuse, tint, tintBlend);
+                        fv_12[2].diffuse = Color_Lerp(fv_12[2].diffuse, tint, tintBlend);
                     }
                     fv_12[0].specular = fog0_3;
                     fv_12[1].specular = fog1_28;
@@ -1394,7 +1390,7 @@ void Mesh::Mesh_DrawOutlinedTinted(u32 tintColor, float tintBlend, PolyBatcher *
             if (edgeEligible_19 == 1 && isBlack_3 == 0) {
                 pa_5 = verts_4 + va_6;
                 pb_6 = verts_4 + vb_6;
-                outlineColor_9 = Color_Lerp(0, halfTint_27, tintBlend);
+                outlineColor_9 = Color_Lerp(0, tint, tintBlend);
                 k_7 = 0.7f;
                 ((FlatVertex *)g_scratchPoly.verts)[2].diffuse = outlineColor_9;
                 ((FlatVertex *)g_scratchPoly.verts)[1].diffuse = outlineColor_9;

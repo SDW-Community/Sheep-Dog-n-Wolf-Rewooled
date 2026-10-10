@@ -331,6 +331,8 @@ void HoleFX::Draw(PolyBatcher *unusedBatcher)
         vertexBuffer->Lock(DDLOCK_WAIT, &locked, &size);
         SDW_RD(app->GetDevice())->SetTexture(0, SDW_RDTEX(captureSurface));
         app->Render_SetStateFlags(RSF_DITHER | RSF_TEXTURED);
+        /* The captured frame already has ColorFix's colours; shade it with plain MODULATE. */
+        SDW_RD(app->GetDevice())->SetTextureModulation2X(false);
         for (tri = 0; tri < 120; tri++) {
             a = (HoleVertex *)locked + tris[tri].poly.idx[0];
             vb = (HoleVertex *)locked + tris[tri].poly.idx[1];
