@@ -16,6 +16,10 @@ void Input_Poll();
 /* whether the keyboard asked to stop running (the movement key opposite the one run with was pressed: input_mgr.cpp);
  * answered once, then cleared */
 u8 Input_TakeRunCancel();
+/* "Legacy Controls": the original camera and keyboard layout, no tap-to-run, no mouse (input_mgr.cpp) */
+extern u8 g_legacyControls;
+/* switches them, saves the choice, and wipes the saved key bindings for the new controls' defaults */
+void Input_SetLegacyControls(u8 on);
 void Input_SetMode(u8 mode);
 void Input_SwapMapping(u8 slot, u16 value);
 void Input_Unacquire();

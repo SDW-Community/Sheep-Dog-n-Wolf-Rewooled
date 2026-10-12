@@ -165,6 +165,7 @@ void PauseMenu_ItemControlDevice(u8 msg, MenuPage *item);
 void PauseMenu_ItemCameraSpeed(u8 msg, MenuPage *item);
 void PauseMenu_ItemCameraAcceleration(u8 msg, MenuPage *item);
 void PauseMenu_ItemInvertCameraJoystick(u8 msg, MenuPage *item);
+void PauseMenu_ItemLegacyControls(u8 msg, MenuPage *item);
 void PauseMenu_ItemBindUp(u8 msg, MenuPage *item);
 void PauseMenu_ItemBindRight(u8 msg, MenuPage *item);
 void PauseMenu_ItemBindDown(u8 msg, MenuPage *item);
@@ -704,7 +705,7 @@ void PauseMenu_Build()
     Menu_AddItems(padPage, PauseMenu_ItemControlDevice, MENU_END);
     bindPage = Menu_AddPage(padPage, (void *)PauseMenu_PageEditConfig, 1);
     Menu_AddItems(padPage, PauseMenu_ItemCameraSpeed, PauseMenu_ItemCameraAcceleration,
-                  PauseMenu_ItemInvertCameraJoystick, MENU_END);
+                  PauseMenu_ItemInvertCameraJoystick, PauseMenu_ItemLegacyControls, MENU_END);
     Menu_AddItems(bindPage, PauseMenu_ItemBindUp, PauseMenu_ItemBindRight, PauseMenu_ItemBindDown,
                   PauseMenu_ItemBindLeft, PauseMenu_ItemBindAction, PauseMenu_ItemBindJump,
                   PauseMenu_ItemBindWolfEyeView, PauseMenu_ItemBindRun, PauseMenu_ItemBindQuickInventory,
@@ -1029,6 +1030,26 @@ void PauseMenu_ItemInvertCameraJoystick(u8 msg, MenuPage *item)
             g_camInvertJoystick ^= 1;
             Camera_SaveControlSettings();
             Ui_PlayMoveSound();
+            break;
+    }
+}
+
+/* "Legacy Controls": the original camera and keyboard layout (Input_SetLegacyControls). Switching wipes the saved key
+ * bindings, which the message says. */
+void PauseMenu_ItemLegacyControls(u8 msg, MenuPage *item)
+{
+    switch (msg) {
+        case MENU_MSG_DRAW_SELECTED:
+            Menu_BuildNavFooter();
+            break;
+        case MENU_MSG_DRAW:
+            Menu_Printf(item, TEXTALIGN_LEFT, "Legacy Controls");
+            Menu_Printf(item, TEXTALIGN_RIGHT, g_onOffNames[g_legacyControls]);
+            break;
+        case MENU_MSG_VALUE_CHANGED:
+            Input_SetLegacyControls(!g_legacyControls);
+            Ui_PlayMoveSound();
+            Menu_ShowMessageBox("Key bindings reset to defaults", TEXTALIGN_CENTER, 2000);
             break;
     }
 }

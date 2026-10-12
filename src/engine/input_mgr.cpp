@@ -62,6 +62,8 @@ u8 Reg_WriteBinary(HKEY key, const char *name, const void *data, DWORD size);
 
 #include "draw2d.h"
 #include "../objects/camera.h"
+#include "../platform/save_store.h"
+#include "input.h"
 extern s32 g_dtRawMs;
 
 /* A keyboard key the bindings may not take (Pause, P, Enter, Esc). Written as a conditional expression: its value is
@@ -400,6 +402,70 @@ u8 Input_TakeRunCancel()
     return cancel;
 }
 
+/* the movement keys' taps forgotten: no run under way, none counted */
+static void InputMgr_ResetTapRun()
+{
+    s_tapKey = 0;
+    s_tapCount = 0;
+    s_runKey = 0;
+    s_runDirSlot = INPUT_RUN_DIR_NONE;
+    s_runCancel = 0;
+}
+
+/* "Legacy Controls" (the pause menu's controls page; saved as CfgGame\LegacyControls, one byte): the controls as the
+ * port had them before the camera and input overhaul.
+ *   - the follow camera as the game made it: g_camOrbit and g_camFreeYaw off (camera.cpp), the mouse not captured (so
+ *     neither it nor its wheel does anything: Main_Loop);
+ *   - no running by tapping a movement key, no stopping with the opposite one (InputMgr_TapRun);
+ *   - the disc's keyboard layout, only sneak moved from Left Ctrl to C (ApplyDefaultKeyChanges).
+ * The controller, the keyboard and controller together, and the camera sliders are the same in both. */
+u8 g_legacyControls;
+static u8 s_legacyControlsLoaded;
+
+static void InputMgr_ApplyLegacyControls()
+{
+    g_camOrbit = !g_legacyControls;
+    g_camFreeYaw = !g_legacyControls;
+    InputMgr_ResetTapRun();
+}
+
+/* once, before the first bindings are loaded: their defaults depend on it */
+static void InputMgr_LoadLegacyControls()
+{
+    SaveKey *key;
+    u8 value = 0;
+    unsigned type = 0, size = sizeof(value);
+    if (s_legacyControlsLoaded)
+        return;
+    s_legacyControlsLoaded = 1;
+    if (Save_KeyExists("CfgGame") && (key = Save_OpenKey("CfgGame")) != 0) {
+        if (Save_QueryValue(key, "LegacyControls", &type, &value, &size) == SAVE_OK && type == 3 && size == 1 &&
+            value <= 1)
+            g_legacyControls = value;
+        Save_CloseKey(key);
+    }
+    InputMgr_ApplyLegacyControls();
+}
+
+/* switches the controls (the pause menu's item). The saved key bindings are wiped (the Config key holds only them)
+ * and the defaults of the new controls loaded in their place, as the "this resets your keys" item says. */
+void Input_SetLegacyControls(u8 on)
+{
+    SaveKey *key;
+    u8 device;
+    g_legacyControls = on ? 1 : 0;
+    s_legacyControlsLoaded = 1;
+    if ((key = Save_OpenKey("CfgGame")) != 0) {
+        Save_SetValue(key, "LegacyControls", 3 /* REG_BINARY */, &g_legacyControls, 1);
+        Save_CloseKey(key);
+    }
+    Save_DeleteKey("Config");
+    device = g_inputMgr.GetCurrentDeviceIdx();
+    g_inputMgr.LoadConfig(g_dirReference);
+    g_inputMgr.SelectDevice(device);
+    InputMgr_ApplyLegacyControls();
+}
+
 /* the repeated taps on the keyboard's four movement keys (the menu direction slots): returns whether the run button is
  * tapped this frame (the same answer for every Poll of a frame: g_rawTimeMs only moves between frames) */
 static u8 InputMgr_TapRun(InputMgr *m)
@@ -528,7 +594,7 @@ long InputMgr::Poll()
                 padBits &= (u16)~s_slotPadBit[slot];
         }
         /* a movement key held after its taps: the run action's button tapped, wherever the controls put it */
-        if (InputMgr_TapRun(this))
+        if (!g_legacyControls && InputMgr_TapRun(this))
             padBits &= g_inputMap[4 + INPUT_RUN_ACTION];
         nav = PAD_ALL_RELEASED;
         escPressed = !escPrev && escDown ? 1 : 0;
@@ -658,6 +724,7 @@ u8 InputMgr::LoadConfig(const char *dir)
 {
     u8 ok = 1;
     u8 devIdx = GetCurrentDeviceIdx();
+    InputMgr_LoadLegacyControls();
     if (LoadBindingTable(1, dir, "KeybConf") == 1) {
         if (LoadBindingTable(1, dir, "UserConf") == 1)
             SelectDevice(devIdx);
@@ -677,7 +744,8 @@ u8 InputMgr::LoadConfig(const char *dir)
 }
 
 /* The port's changes to the disc's default keyboard layout (DefKConf.BSC), applied only when the defaults are loaded:
- * a layout the player saved from the pause menu (KeybConf) is left as it is.
+ * a layout the player saved from the pause menu (KeybConf) is left as it is. With g_legacyControls only the first
+ * (sneak, to C rather than Left Shift: Left Shift stays looking around); otherwise:
  *   - sneak (R1) moves from Left Ctrl to Left Shift: Ctrl + the movement keys is taken by macOS for Mission Control and
  *     switching Spaces, before the game sees it. It moves on every OS, so the layout is the same everywhere. Looking
  *     around (Triangle), on Left Shift, moves to C.
@@ -687,6 +755,11 @@ u8 InputMgr::LoadConfig(const char *dir)
  * Running is also a movement key tapped INPUT_RUN_TAPS times and held (Poll). */
 void InputMgr::ApplyDefaultKeyChanges()
 {
+    if (g_legacyControls) {
+        if (keyTable[INPUT_BIND_R1].code == DIK_LCONTROL)
+            keyTable[INPUT_BIND_R1].code = DIK_C;
+        return;
+    }
     if (keyTable[INPUT_BIND_CROSS].dev == keyboard && keyTable[INPUT_BIND_CROSS].code == DIK_X &&
         device3 && (presentMask & INPUTDEV_MASK_MOUSE)) {
         keyTable[INPUT_BIND_CROSS].dev = device3;
