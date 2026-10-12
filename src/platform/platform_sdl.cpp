@@ -25,6 +25,7 @@ static float s_scroll;         /* the wheel since the last Platform_TakeMouseScr
 static int s_rightClicks;      /* right button presses since the last Platform_TakeMouseRightClicks */
 static SDL_Gamepad *s_gamepad;  /* the controller the game reads (Platform_ReadJoystick) */
 static int s_mouseCaptured = 1; /* the mouse is in relative mode, its cursor hidden (Platform_SetMouseCaptured) */
+static SDL_Gamepad *s_gamepad; /* the controller the game reads (Platform_ReadJoystick) */
 
 /* SDL's log, also written to SheepD3D.log in the save folder (save_store.h), started afresh every run: on Windows the
  * game has no console, so the file is the only place a player can find SDL's errors. */
@@ -134,6 +135,20 @@ unsigned Platform_PollEvents()
             case SDL_EVENT_QUIT:
             case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
                 result |= PLATFORM_EVENT_QUIT;
+                break;
+            /* controllers plugged in and out while the game runs: with none open, the new one is; when the open one
+             * goes, the first left is */
+            case SDL_EVENT_GAMEPAD_ADDED:
+                if (!s_gamepad && (s_gamepad = SDL_OpenGamepad(e.gdevice.which)) != 0)
+                    SDL_Log("SheepD3D: controller connected: %s", SDL_GetGamepadName(s_gamepad));
+                break;
+            case SDL_EVENT_GAMEPAD_REMOVED:
+                if (s_gamepad && SDL_GetGamepadID(s_gamepad) == e.gdevice.which) {
+                    SDL_Log("SheepD3D: controller disconnected");
+                    Platform_CloseJoystick();
+                    if (Platform_JoystickCount() > 0)
+                        Platform_OpenJoystick(0);
+                }
                 break;
             case SDL_EVENT_MOUSE_WHEEL:
                 s_wheel += (int)(e.wheel.y * 120.0f); /* DirectInput's units: 120 per notch */
