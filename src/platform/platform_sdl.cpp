@@ -22,6 +22,7 @@ static unsigned s_flags;
 static int s_wheel; /* the mouse wheel since the last Platform_ReadMouse */
 static float s_lookX, s_lookY; /* the mouse motion since the last Platform_TakeMouseLook (the orbit camera's) */
 static float s_scroll;         /* the wheel since the last Platform_TakeMouseScroll, in notches (the item wheel's) */
+static int s_rightClicks;      /* right button presses since the last Platform_TakeMouseRightClicks */
 static SDL_Gamepad *s_gamepad;  /* the controller the game reads (Platform_ReadJoystick) */
 static int s_mouseCaptured = 1; /* the mouse is in relative mode, its cursor hidden (Platform_SetMouseCaptured) */
 
@@ -153,6 +154,10 @@ unsigned Platform_PollEvents()
                         Platform_OpenJoystick(0);
                 }
                 break;
+            case SDL_EVENT_MOUSE_BUTTON_DOWN:
+                if (e.button.button == SDL_BUTTON_RIGHT && Platform_IsActive() && s_mouseCaptured)
+                    s_rightClicks++;
+                break;
             case SDL_EVENT_MOUSE_MOTION:
                 if (Platform_IsActive() && s_mouseCaptured) {
                     s_lookX += e.motion.xrel;
@@ -239,20 +244,16 @@ int Platform_ResolvePath(const char *path, char *out, int capacity)
 #endif
 }
 
-unsigned char *Platform_LoadImageRGBA(const char *path, int *width, int *height)
+/* a loaded surface as packed RGBA (the surface destroyed); 0 when it cannot be converted */
+static unsigned char *Platform_SurfaceToRGBA(SDL_Surface *loaded, const char *what, int *width, int *height)
 {
-    char resolved[4096];
-    SDL_Surface *loaded, *rgba;
+    SDL_Surface *rgba;
     unsigned char *pixels = 0;
     int row;
-    if (!Platform_ResolvePath(path, resolved, sizeof(resolved)))
-        return 0;
-    if (!(loaded = SDL_LoadPNG(resolved)))
-        return 0; /* most often: no such file, the normal case for a page without an override */
     rgba = SDL_ConvertSurface(loaded, SDL_PIXELFORMAT_RGBA32);
     SDL_DestroySurface(loaded);
     if (!rgba) {
-        SDL_Log("SheepD3D: %s: %s", resolved, SDL_GetError());
+        SDL_Log("SheepD3D: %s: %s", what, SDL_GetError());
         return 0;
     }
     if ((pixels = (unsigned char *)SDL_malloc((size_t)rgba->w * rgba->h * 4)) != 0) {
@@ -264,6 +265,27 @@ unsigned char *Platform_LoadImageRGBA(const char *path, int *width, int *height)
     }
     SDL_DestroySurface(rgba);
     return pixels;
+}
+
+unsigned char *Platform_LoadImageRGBA(const char *path, int *width, int *height)
+{
+    char resolved[4096];
+    SDL_Surface *loaded;
+    if (!Platform_ResolvePath(path, resolved, sizeof(resolved)))
+        return 0;
+    if (!(loaded = SDL_LoadPNG(resolved)))
+        return 0; /* most often: no such file, the normal case for a page without an override */
+    return Platform_SurfaceToRGBA(loaded, resolved, width, height);
+}
+
+unsigned char *Platform_DecodeImageRGBA(const void *png, int size, int *width, int *height)
+{
+    SDL_Surface *loaded = SDL_LoadPNG_IO(SDL_IOFromConstMem(png, (size_t)size), true);
+    if (!loaded) {
+        SDL_Log("SheepD3D: embedded image: %s", SDL_GetError());
+        return 0;
+    }
+    return Platform_SurfaceToRGBA(loaded, "embedded image", width, height);
 }
 
 void Platform_FreeImage(unsigned char *pixels)
@@ -419,6 +441,7 @@ void Platform_SetMouseCaptured(int captured)
         SDL_ShowCursor();
     s_lookX = s_lookY = 0; /* nothing moved while it was free turns the camera */
     s_scroll = 0;
+    s_rightClicks = 0;
 }
 
 int Platform_TakeMouseScroll()
@@ -426,6 +449,13 @@ int Platform_TakeMouseScroll()
     int notches = (int)s_scroll; /* whole notches; a trackpad's fractions add up to the next ones */
     s_scroll -= notches;
     return notches;
+}
+
+int Platform_TakeMouseRightClicks()
+{
+    int clicks = s_rightClicks;
+    s_rightClicks = 0;
+    return clicks;
 }
 
 void Platform_TakeMouseLook(float *dx, float *dy)
@@ -547,6 +577,53 @@ unsigned Platform_ReadJoystickDpad()
     if (SDL_GetGamepadButton(s_gamepad, SDL_GAMEPAD_BUTTON_DPAD_LEFT))
         directions |= PLATFORM_DPAD_LEFT;
     return directions;
+}
+
+int Platform_JoystickFamily()
+{
+    if (!s_gamepad || !SDL_GamepadConnected(s_gamepad))
+        return PLATFORM_PAD_NONE;
+    switch (SDL_GetGamepadType(s_gamepad)) {
+        case SDL_GAMEPAD_TYPE_XBOX360:
+            return PLATFORM_PAD_XBOX360;
+        case SDL_GAMEPAD_TYPE_XBOXONE:
+            return PLATFORM_PAD_XBOXONE;
+        case SDL_GAMEPAD_TYPE_PS3:
+            return PLATFORM_PAD_PS3;
+        case SDL_GAMEPAD_TYPE_PS4:
+            return PLATFORM_PAD_PS4;
+        case SDL_GAMEPAD_TYPE_PS5:
+            return PLATFORM_PAD_PS5;
+        case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_PRO:
+            return PLATFORM_PAD_SWITCH_PRO;
+        case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_LEFT:
+        case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_RIGHT:
+            return PLATFORM_PAD_JOYCON_SINGLE;
+        case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_PAIR:
+            return PLATFORM_PAD_JOYCON_PAIR;
+        case SDL_GAMEPAD_TYPE_GAMECUBE:
+            return PLATFORM_PAD_GAMECUBE;
+        default:
+            return PLATFORM_PAD_GENERIC;
+    }
+}
+
+int Platform_JoystickFaceButton(int slot)
+{
+    if (slot < 0 || slot >= (int)SDL_arraysize(s_padMapping))
+        return -1;
+    switch (s_padMapping[slot].button) {
+        case SDL_GAMEPAD_BUTTON_WEST:
+            return PLATFORM_FACE_WEST;
+        case SDL_GAMEPAD_BUTTON_NORTH:
+            return PLATFORM_FACE_NORTH;
+        case SDL_GAMEPAD_BUTTON_EAST:
+            return PLATFORM_FACE_EAST;
+        case SDL_GAMEPAD_BUTTON_SOUTH:
+            return PLATFORM_FACE_SOUTH;
+        default:
+            return -1;
+    }
 }
 
 int Platform_ReadJoystick(int axes[5], unsigned char *buttons, int buttonCount)

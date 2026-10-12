@@ -52,6 +52,8 @@ int Platform_ResolvePath(const char *path, char *out, int capacity);
  * Platform_ResolvePath finds it; 0 when there is no such file or it is not a PNG. Free it with Platform_FreeImage. */
 unsigned char *Platform_LoadImageRGBA(const char *path, int *width, int *height);
 void Platform_FreeImage(unsigned char *pixels);
+/* The same from a PNG in memory (an image embedded in the program); 0 when it is not a PNG. */
+unsigned char *Platform_DecodeImageRGBA(const void *png, int size, int *width, int *height);
 void Platform_ShowMessage(const char *title, const char *message, int isError);
 /* A line in the log (SDL_Log: the terminal or CLion's Run window, the Console app on macOS), printf-style. For game
  * code: it cannot include SDL's headers, whose C runtime clashes with the game's own declarations (src/sdk/crt.h). */
@@ -82,6 +84,9 @@ void Platform_SetMouseCaptured(int captured);
 /* The mouse wheel's whole notches since the previous call (up, away from the player, positive; a "natural scrolling"
  * setting undone), for the item wheel: counted apart from Platform_ReadMouse's. 0 while the mouse is not captured. */
 int Platform_TakeMouseScroll();
+/* The right mouse button's presses since the previous call, for putting the held item away (Wolf::QuickInventory).
+ * 0 while the mouse is not captured, so a click in the pause menu does not count. */
+int Platform_TakeMouseRightClicks();
 
 /* Controllers: SDL's gamepads (its standard layout), in SDL's order. Platform_ReadJoystick: the left stick as the X and
  * Y axes in -65535..65535 (DirectInput's range as the game set it; Z is 0), the right stick as axes 3 and 4 (same
@@ -137,5 +142,29 @@ enum {
 };
 /* Held D-pad directions, kept separate from the gameplay buttons and axes. Returns 0 without focus or a pad. */
 unsigned Platform_ReadJoystickDpad();
+/* The open controller's family, for its button icons (src/engine/button_icons.cpp); PLATFORM_PAD_NONE without one. */
+enum {
+    PLATFORM_PAD_NONE,
+    PLATFORM_PAD_GENERIC, /* SDL knows the controller but not its maker's layout */
+    PLATFORM_PAD_XBOX360,
+    PLATFORM_PAD_XBOXONE,
+    PLATFORM_PAD_PS3,
+    PLATFORM_PAD_PS4,
+    PLATFORM_PAD_PS5,
+    PLATFORM_PAD_SWITCH_PRO,
+    PLATFORM_PAD_JOYCON_SINGLE, /* one Joy-Con held sideways */
+    PLATFORM_PAD_JOYCON_PAIR,
+    PLATFORM_PAD_GAMECUBE,
+};
+int Platform_JoystickFamily();
+/* Which face button PlayStation button `slot` (the game's INPUT_BIND_* order) is on the controller, by position:
+ * PLATFORM_FACE_WEST..SOUTH, or -1 when the fixed mapping puts it on a shoulder, a trigger or elsewhere. */
+enum {
+    PLATFORM_FACE_WEST,
+    PLATFORM_FACE_NORTH,
+    PLATFORM_FACE_EAST,
+    PLATFORM_FACE_SOUTH,
+};
+int Platform_JoystickFaceButton(int slot);
 
 #endif

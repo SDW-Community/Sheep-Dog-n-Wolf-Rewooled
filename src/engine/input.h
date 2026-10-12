@@ -16,6 +16,8 @@ void Input_Poll();
 /* whether the keyboard asked to stop running (the movement key opposite the one run with was pressed: input_mgr.cpp);
  * answered once, then cleared */
 u8 Input_TakeRunCancel();
+/* whether a mouse button (0 left, 1 right, 2 middle, 3 X1) is bound to an action in the keyboard's table */
+u8 Input_IsMouseButtonBound(u8 button);
 /* "Legacy Controls": the original camera and keyboard layout, no tap-to-run, no mouse (input_mgr.cpp) */
 extern u8 g_legacyControls;
 /* switches them, saves the choice, and wipes the saved key bindings for the new controls' defaults */

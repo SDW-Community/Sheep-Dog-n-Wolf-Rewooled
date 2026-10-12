@@ -402,6 +402,19 @@ u8 Input_TakeRunCancel()
     return cancel;
 }
 
+/* whether a mouse button (0 left, 1 right, 2 middle, 3 X1) is bound to one of the twelve buttons in the keyboard's
+ * table (the controls menu can bind the mouse's buttons) */
+u8 Input_IsMouseButtonBound(u8 button)
+{
+    u8 slot;
+    if (!g_inputMgr.device3)
+        return 0;
+    for (slot = INPUT_BIND_TRIANGLE; slot <= INPUT_BIND_R3; slot++)
+        if (g_inputMgr.keyTable[slot].dev == g_inputMgr.device3 && g_inputMgr.keyTable[slot].code == button)
+            return 1;
+    return 0;
+}
+
 /* the movement keys' taps forgotten: no run under way, none counted */
 static void InputMgr_ResetTapRun()
 {

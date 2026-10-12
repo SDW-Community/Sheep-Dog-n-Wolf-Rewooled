@@ -800,6 +800,10 @@ static u8 s_wheelByScroll;           /* the open wheel was opened by the mouse w
 static s32 s_wheelScrollQueue;       /* notches still to turn: positive the next items, negative the previous */
 static s32 s_wheelScrollCloseMs;     /* time left before a mouse-opened wheel closes */
 
+/* the right mouse button with an item in hand: the item put away, as choosing the wheel's empty slot does (only when the
+ * button is not bound to an action in the controls menu) */
+#define INVWHEEL_STOW_MOUSE_BUTTON 1
+
 /* the item wheel, every frame from Wolf_Update. On foot: the inventory button's press edge opens the wheel
  * when the state has flag 0x100 and Wolf_CanUseInventory; while it is open, left/right turn it (not while it is still
  * rotating) and releasing the button closes it and returns 1 (the caller then calls Wolf_SwapHeldItem(1, 1)); losing
@@ -811,6 +815,7 @@ s32 Wolf::QuickInventory(Pad *pad)
     s32 allowed;
     s32 result; /* the names order the frame: result -4, allowed -8, desc -0xc, wheelOpen -0x10 */
     s32 scroll = -Platform_TakeMouseScroll(); /* taken every frame, so no old notch opens the wheel later */
+    s32 stowClick = Platform_TakeMouseRightClicks() && !Input_IsMouseButtonBound(INVWHEEL_STOW_MOUSE_BUTTON);
     u8 buttonHeld = !(pad->cur.buttons & ~g_padMasks[6]);
     result = 0;
     switch (mode) {
@@ -863,6 +868,10 @@ s32 Wolf::QuickInventory(Pad *pad)
                     s_wheelScrollQueue = 0;
                     result = 1;
                 }
+            } else if (stowClick && heldObject && allowed && CanSwapItem(1) && !(g_gameFlags & GF_ITEM_FLY)) {
+                /* the right mouse button: nothing selected, so the caller's Wolf_SwapHeldItem puts the item away */
+                Inventory_ClearSelection();
+                result = 1;
             } else if (allowed && !(g_gameFlags & GF_ITEM_FLY) &&
                        ((buttonHeld && (pad->prev.buttons & ~g_padMasks[6])) || scroll)) {
                 /* the button's press edge, or a notch of the mouse wheel (which also turns it that notch) */
