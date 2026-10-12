@@ -237,6 +237,7 @@ void Main_Loop(D3DApp *app)
             }
         }
         Time_Update();
+        Platform_SetMouseCaptured(!(g_gameFlags & GF_PAUSED)); /* the cursor shown while the game is paused */
         if (g_pPolyBin && g_pPolyBin->renderer && g_pPolyBin->renderer->deviceReady) {
             g_pPolyBin->Render_BeginFrame();
             if ((g_gameFlags & GF_LEVEL_LOADED_A) && (g_gameFlags & GF_LEVEL_LOADED_B))

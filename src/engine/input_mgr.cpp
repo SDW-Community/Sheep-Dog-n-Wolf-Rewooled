@@ -154,8 +154,9 @@ u8 InputMgr::PollDevice(u8 devIdx)
     return 0;
 }
 
-/* makes a device current and preferred, carries the old current device's allowHeld flag over, and points the
- * bindings at the keyboard or the pad table. */
+/* makes a device current and preferred and carries the old current device's allowHeld flag over. The bindings are
+ * always the keyboard's (and the mouse's): the controller's are fixed (ApplyFixedPadMapping), so the controls menu edits
+ * the keyboard's whichever device is current. */
 u8 InputMgr::SelectDevice(u8 devIdx)
 {
     InputDevice *dev = DeviceFromIndex(devIdx);
@@ -164,10 +165,7 @@ u8 InputMgr::SelectDevice(u8 devIdx)
         preferred = dev;
         current = dev;
         SetActiveFlags(held);
-        if (current == keyboard)
-            bindings = keyTable;
-        else
-            bindings = padTable;
+        bindings = keyTable;
         return 1;
     }
     return 0;
@@ -358,25 +356,159 @@ static u8 InputMgr_StickByte(float axis)
     return (u8)(v < 0 ? 0 : v > 0xff ? 0xff : v);
 }
 
+/* the PAD_ bit of each of the twelve button slots (INPUT_BIND_TRIANGLE .. INPUT_BIND_R3) */
+static const u16 s_slotPadBit[12] = {PAD_TRIANGLE, PAD_CIRCLE, PAD_CROSS,  PAD_SQUARE, PAD_L1, PAD_R1,
+                                     PAD_L2,       PAD_R2,     PAD_SELECT, PAD_START,  PAD_L3, PAD_R3};
+
+/* whether a controller answered this frame (CheckDevices): its buttons count, and it may be the current device */
+static u8 s_padConnected;
+
+extern u16 g_inputMap[16]; /* the actions' pad masks (input.cpp): g_inputMap[4 + n] is g_padMasks[n] */
+extern s32 g_rawTimeMs;
+
+/* running by repeated taps on a movement key: the same key pressed INPUT_RUN_TAPS times, each within INPUT_TAP_GAP_MS of
+ * the one before, the last one then held (fewer would trigger while stepping carefully across platforms).
+ * The game runs while the run button is TAPPED (Wolf::RunTapCheck: each tap 0.1 to 0.75 s after the last keeps the run,
+ * a faster one cancels it, none ends it), so while the key is held the run button is tapped every INPUT_RUN_TAP_MS;
+ * letting the key go stops the taps, and the Wolf, no longer steered, stops. */
+#define INPUT_RUN_TAPS 3      /* the presses that start a run */
+#define INPUT_TAP_GAP_MS 300  /* the longest gap between two of them */
+#define INPUT_RUN_TAP_MS 400 /* inside the game's window of 0.1 to 0.75 s (WolfMoveBank params[5], params[6]) */
+#define INPUT_RUN_ACTION 9   /* the run action's g_padMasks index (ScnControllable::ReadPad) */
+static u16 s_tapKey;         /* the movement key tapped last, when (g_rawTimeMs), and its presses in a row so far */
+static s32 s_tapTime;
+static u8 s_tapCount;
+static u16 s_runKey;         /* the movement key held after its taps: running while it is held; 0 none */
+static s32 s_runTapTime;     /* when the run button was last tapped for it */
+static u8 s_moveKeyWasDown[4];
+
+/* stopping a run with the opposite movement key (W after S, A after D, and back): while the key run with is held, or
+ * within the game's run window after it was let go, pressing the opposite one asks the Wolf to stop running
+ * (Input_TakeRunCancel, read by its running states) instead of turning around at a run */
+#define INPUT_RUN_DIR_NONE 0xff
+#define INPUT_RUN_AFTER_MS 750      /* the game's run window: a run lasts this long after the last run tap */
+#define INPUT_RUN_CANCEL_TTL_MS 150 /* a cancel not taken by then is dropped (the Wolf was not running) */
+static u8 s_runDirSlot = INPUT_RUN_DIR_NONE; /* the slot (0 up, 1 right, 2 down, 3 left) of the key run with */
+static s32 s_runDirTime;                     /* when that key was last held */
+static u8 s_runCancel;
+static s32 s_runCancelTime;
+
+u8 Input_TakeRunCancel()
+{
+    u8 cancel = s_runCancel && g_rawTimeMs >= s_runCancelTime && g_rawTimeMs - s_runCancelTime <= INPUT_RUN_CANCEL_TTL_MS;
+    s_runCancel = 0;
+    return cancel;
+}
+
+/* the repeated taps on the keyboard's four movement keys (the menu direction slots): returns whether the run button is
+ * tapped this frame (the same answer for every Poll of a frame: g_rawTimeMs only moves between frames) */
+static u8 InputMgr_TapRun(InputMgr *m)
+{
+    u8 slot, down;
+    u16 code;
+    for (slot = 0; slot < 4; slot++) {
+        code = m->keyTable[INPUT_BIND_MENU_UP + slot].code;
+        down = code < m->keyboard->buttonCount && m->keyboard->buttonDown[code];
+        if (down && !s_moveKeyWasDown[slot] && s_runDirSlot != INPUT_RUN_DIR_NONE && slot == ((s_runDirSlot + 2) & 3) &&
+            g_rawTimeMs >= s_runDirTime && g_rawTimeMs - s_runDirTime <= INPUT_RUN_AFTER_MS) {
+            /* the opposite key: stop running, and no tap counted from this press */
+            s_runCancel = 1;
+            s_runCancelTime = g_rawTimeMs;
+            s_runKey = 0;
+            s_runDirSlot = INPUT_RUN_DIR_NONE;
+            s_tapKey = 0;
+            s_tapCount = 0;
+            s_moveKeyWasDown[slot] = down;
+            continue;
+        }
+        if (down && !s_moveKeyWasDown[slot]) {
+            s32 since = g_rawTimeMs - s_tapTime;
+            if (code == s_tapKey && since >= 0 && since <= INPUT_TAP_GAP_MS)
+                s_tapCount++;
+            else
+                s_tapCount = 1; /* another key, or too late: counting again from this press */
+            if (s_tapCount >= INPUT_RUN_TAPS) {
+                s_runKey = code;
+                s_runDirSlot = slot;
+                s_runTapTime = g_rawTimeMs - INPUT_RUN_TAP_MS; /* the first tap at once */
+                s_tapCount = 0;
+            }
+            s_tapKey = code;
+            s_tapTime = g_rawTimeMs;
+        }
+        s_moveKeyWasDown[slot] = down;
+    }
+    if (s_runKey && !(s_runKey < m->keyboard->buttonCount && m->keyboard->buttonDown[s_runKey]))
+        s_runKey = 0; /* let go: no more taps */
+    if (s_runKey)
+        s_runDirTime = g_rawTimeMs; /* the opposite key cancels until INPUT_RUN_AFTER_MS after this */
+    if (!s_runKey)
+        return 0;
+    if (g_rawTimeMs == s_runTapTime)
+        return 1; /* this frame's tap, for the frame's other Poll */
+    if (g_rawTimeMs - s_runTapTime >= INPUT_RUN_TAP_MS || g_rawTimeMs < s_runTapTime) {
+        s_runTapTime = g_rawTimeMs;
+        return 1;
+    }
+    return 0;
+}
+
+/* whether a binding's button is held: its device exists and has that button */
+static u8 InputMgr_SlotHeld(const InputBinding *b)
+{
+    return b->dev && b->code < b->dev->buttonCount && b->dev->buttonPressed[b->code] == 1;
+}
+
+/* whether the keyboard (or a mouse button bound in its table) is in use this frame: a movement key or a bound button */
+static u8 InputMgr_KeyboardInUse(InputMgr *m)
+{
+    u8 slot;
+    if (m->keyboard->axisX != 0.0f || m->keyboard->axisY != 0.0f)
+        return 1;
+    for (slot = INPUT_BIND_TRIANGLE; slot <= INPUT_BIND_R3; slot++)
+        if (InputMgr_SlotHeld(&m->keyTable[slot]))
+            return 1;
+    return 0;
+}
+
+/* whether the controller is in use this frame: a stick out of its centre or a button */
+static u8 InputMgr_PadInUse(InputMgr *m)
+{
+    const float deadzone = 0.3f;
+    InputDevice *pad = m->joystick;
+    u16 i;
+    if (pad->axisX > deadzone || pad->axisX < -deadzone || pad->axisY > deadzone || pad->axisY < -deadzone ||
+        pad->axisRX > deadzone || pad->axisRX < -deadzone || pad->axisRY > deadzone || pad->axisRY < -deadzone)
+        return 1;
+    for (i = 0; i < pad->buttonCount; i++)
+        if (pad->buttonPressed[i] == 1)
+            return 1;
+    return 0;
+}
+
 long InputMgr::Poll()
 {
     u16 nav;
     u8 escDown;
+    u8 slot;
     if (CheckDevices() == 1) {
         escDown = keyboard->buttonPressed[DIK_ESCAPE];
         if (joystick && joystick->buttonCount > INPUT_BIND_START) {
             /* Read held state so opening a menu (allowHeld = 0) cannot retrigger Start as Esc. */
-            if (current == joystick && joystick->buttonDown[INPUT_BIND_START] &&
+            if (s_padConnected && joystick->buttonDown[INPUT_BIND_START] &&
                 !joystick->buttonBlocked[INPUT_BIND_START])
                 escDown = 1;
         }
         padBits = 0xffff;
         rightX = rightY = 0x80; /* centred unless an analog device has a right stick */
+        /* the right stick (the camera) whenever a controller is connected, whichever device moves the player */
+        if (s_padConnected) {
+            rightX = InputMgr_StickByte(g_camInvertJoystick ? -joystick->axisRX : joystick->axisRX);
+            rightY = InputMgr_StickByte(joystick->axisRY);
+        }
         if (current->isDigital == 0) {
             axisX = (u8)(s32)(current->axisX * 128.0f) + 0x80;
             axisY = (u8)(s32)(current->axisY * 128.0f) + 0x80;
-            rightX = InputMgr_StickByte(g_camInvertJoystick ? -current->axisRX : current->axisRX);
-            rightY = InputMgr_StickByte(current->axisRY);
         } else {
             axisX = 0x80;
             axisY = 0x80;
@@ -389,32 +521,15 @@ long InputMgr::Poll()
             else if (current->axisY > 0.0f)
                 padBits &= (u16)~PAD_DOWN;
         }
-        if (bindings[0].dev->buttonCount) {
-            if (bindings[INPUT_BIND_TRIANGLE].dev->buttonPressed[bindings[INPUT_BIND_TRIANGLE].code] == 1)
-                padBits &= (u16)~PAD_TRIANGLE; /* Triangle */
-            if (bindings[INPUT_BIND_CIRCLE].dev->buttonPressed[bindings[INPUT_BIND_CIRCLE].code] == 1)
-                padBits &= (u16)~PAD_CIRCLE; /* Circle */
-            if (bindings[INPUT_BIND_CROSS].dev->buttonPressed[bindings[INPUT_BIND_CROSS].code] == 1)
-                padBits &= (u16)~PAD_CROSS; /* Cross */
-            if (bindings[INPUT_BIND_SQUARE].dev->buttonPressed[bindings[INPUT_BIND_SQUARE].code] == 1)
-                padBits &= (u16)~PAD_SQUARE; /* Square */
-            if (bindings[INPUT_BIND_L1].dev->buttonPressed[bindings[INPUT_BIND_L1].code] == 1)
-                padBits &= (u16)~PAD_L1; /* L1 */
-            if (bindings[INPUT_BIND_R1].dev->buttonPressed[bindings[INPUT_BIND_R1].code] == 1)
-                padBits &= (u16)~PAD_R1; /* R1 */
-            if (bindings[INPUT_BIND_L2].dev->buttonPressed[bindings[INPUT_BIND_L2].code] == 1)
-                padBits &= (u16)~PAD_L2; /* L2 */
-            if (bindings[INPUT_BIND_R2].dev->buttonPressed[bindings[INPUT_BIND_R2].code] == 1)
-                padBits &= (u16)~PAD_R2; /* R2 */
-            if (bindings[INPUT_BIND_SELECT].dev->buttonPressed[bindings[INPUT_BIND_SELECT].code] == 1)
-                padBits &= (u16)~PAD_SELECT; /* Select */
-            if (bindings[INPUT_BIND_START].dev->buttonPressed[bindings[INPUT_BIND_START].code] == 1)
-                padBits &= (u16)~PAD_START; /* Start */
-            if (bindings[INPUT_BIND_L3].dev->buttonPressed[bindings[INPUT_BIND_L3].code] == 1)
-                padBits &= (u16)~PAD_L3; /* L3 */
-            if (bindings[INPUT_BIND_R3].dev->buttonPressed[bindings[INPUT_BIND_R3].code] == 1)
-                padBits &= (u16)~PAD_R3; /* R3 */
+        /* the buttons of both: the keyboard's table (keys and mouse buttons) and, while one is connected, the
+         * controller's */
+        for (slot = INPUT_BIND_TRIANGLE; slot <= INPUT_BIND_R3; slot++) {
+            if (InputMgr_SlotHeld(&keyTable[slot]) || (s_padConnected && InputMgr_SlotHeld(&padTable[slot])))
+                padBits &= (u16)~s_slotPadBit[slot];
         }
+        /* a movement key held after its taps: the run action's button tapped, wherever the controls put it */
+        if (InputMgr_TapRun(this))
+            padBits &= g_inputMap[4 + INPUT_RUN_ACTION];
         nav = PAD_ALL_RELEASED;
         escPressed = !escPrev && escDown ? 1 : 0;
         enterPressed = !enterPrev && keyboard->buttonPressed[DIK_RETURN] ? 1 : 0;
@@ -563,12 +678,38 @@ u8 InputMgr::LoadConfig(const char *dir)
 
 /* The port's changes to the disc's default keyboard layout (DefKConf.BSC), applied only when the defaults are loaded:
  * a layout the player saved from the pause menu (KeybConf) is left as it is.
- *   - sneak (R1) moves from Left Ctrl to C: Ctrl + the arrow keys (movement) is taken by macOS for Mission Control and
- *     switching Spaces, before the game sees it. It moves on every OS, so the layout is the same everywhere. */
+ *   - sneak (R1) moves from Left Ctrl to Left Shift: Ctrl + the movement keys is taken by macOS for Mission Control and
+ *     switching Spaces, before the game sees it. It moves on every OS, so the layout is the same everywhere. Looking
+ *     around (Triangle), on Left Shift, moves to C.
+ *   - movement moves from the arrow keys to W A S D, and so the camera's rotation (L2, R2) from A and S to Q and E.
+ *     The menus are still moved through with the arrow keys (Poll reads them as they are).
+ *   - the map (Select) moves from F12 to Tab.
+ * Running is also a movement key tapped INPUT_RUN_TAPS times and held (Poll). */
 void InputMgr::ApplyDefaultKeyChanges()
 {
+    if (keyTable[INPUT_BIND_CROSS].dev == keyboard && keyTable[INPUT_BIND_CROSS].code == DIK_X &&
+        device3 && (presentMask & INPUTDEV_MASK_MOUSE)) {
+        keyTable[INPUT_BIND_CROSS].dev = device3;
+        keyTable[INPUT_BIND_CROSS].code = 0; /* 0 left, 1 right, 2 middle, 3 X1 */
+    }
+    if (keyTable[INPUT_BIND_TRIANGLE].code == DIK_LSHIFT && keyTable[INPUT_BIND_R1].code == DIK_LCONTROL)
+        keyTable[INPUT_BIND_TRIANGLE].code = DIK_C;
     if (keyTable[INPUT_BIND_R1].code == DIK_LCONTROL)
-        keyTable[INPUT_BIND_R1].code = DIK_C;
+        keyTable[INPUT_BIND_R1].code = DIK_LSHIFT;
+    if (keyTable[INPUT_BIND_SELECT].code == DIK_F12)
+        keyTable[INPUT_BIND_SELECT].code = DIK_TAB;
+    if (keyTable[INPUT_BIND_L2].code == DIK_A)
+        keyTable[INPUT_BIND_L2].code = DIK_Q;
+    if (keyTable[INPUT_BIND_R2].code == DIK_S)
+        keyTable[INPUT_BIND_R2].code = DIK_E;
+    if (keyTable[INPUT_BIND_MENU_UP].code == DIK_UP)
+        BindMenuKey(INPUT_BIND_MENU_UP, DIK_W);
+    if (keyTable[INPUT_BIND_MENU_LEFT].code == DIK_LEFT)
+        BindMenuKey(INPUT_BIND_MENU_LEFT, DIK_A);
+    if (keyTable[INPUT_BIND_MENU_DOWN].code == DIK_DOWN)
+        BindMenuKey(INPUT_BIND_MENU_DOWN, DIK_S);
+    if (keyTable[INPUT_BIND_MENU_RIGHT].code == DIK_RIGHT)
+        BindMenuKey(INPUT_BIND_MENU_RIGHT, DIK_D);
 }
 
 /* The controller's bindings are fixed: the controller device delivers the twelve PlayStation buttons already in the
@@ -871,29 +1012,28 @@ void InputMgr::Input_GetKeyName(u32 diObjOffset, char *out, u32 outSize)
         *out = 0;
 }
 
-/* re-acquires when the current device is acquired, polls the keyboard (failure: 0), the joystick and the
- * mouse; a pad device that stopped answering hands over to the keyboard table, and the preferred device is taken back
- * when it answers again. */
+/* re-acquires when the current device is acquired and polls every device: the keyboard (failure: 0), the controller
+ * and the mouse. The keyboard and the controller both work at once (Poll merges their buttons); the current device,
+ * whose movement Poll reads (the keyboard's keys as the d-pad, the controller's stick as analog), is the one last used:
+ * the controller when only it is in use, the keyboard when only it is, and the keyboard while no controller answers. */
 u8 InputMgr::CheckDevices()
 {
+    u8 keyboardInUse, padInUse;
     if (current->acquired == 1)
         SetAcquiredAll(1);
     if (!PollDevice(INPUTDEV_MASK_KEYBOARD))
         return 0;
-    if ((presentMask & INPUTDEV_MASK_JOYSTICK) && !PollDevice(INPUTDEV_MASK_JOYSTICK)) {
-        if (current == joystick) {
-            current = keyboard;
-            bindings = keyTable;
-        }
-    } else if ((presentMask & INPUTDEV_MASK_MOUSE) && !PollDevice(INPUTDEV_MASK_MOUSE)) {
-        if (current == device3) {
-            current = keyboard;
-            bindings = keyTable;
-        }
-    } else if (preferred != current) {
-        current = preferred;
-        bindings = padTable;
-    }
+    s_padConnected = (presentMask & INPUTDEV_MASK_JOYSTICK) && PollDevice(INPUTDEV_MASK_JOYSTICK);
+    if (presentMask & INPUTDEV_MASK_MOUSE)
+        PollDevice(INPUTDEV_MASK_MOUSE);
+    keyboardInUse = InputMgr_KeyboardInUse(this);
+    padInUse = s_padConnected && InputMgr_PadInUse(this);
+    if (!s_padConnected || (keyboardInUse && !padInUse))
+        current = keyboard;
+    else if (padInUse && !keyboardInUse)
+        current = joystick;
+    preferred = current;
+    bindings = keyTable;
     return 1;
 }
 

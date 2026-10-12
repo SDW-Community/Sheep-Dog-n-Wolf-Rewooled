@@ -20,6 +20,10 @@ int Game_Main(int argc, char **argv); /* src/app/app_main.cpp */
 static SDL_Window *s_window;
 static unsigned s_flags;
 static int s_wheel; /* the mouse wheel since the last Platform_ReadMouse */
+static float s_lookX, s_lookY; /* the mouse motion since the last Platform_TakeMouseLook (the orbit camera's) */
+static float s_scroll;         /* the wheel since the last Platform_TakeMouseScroll, in notches (the item wheel's) */
+static SDL_Gamepad *s_gamepad;  /* the controller the game reads (Platform_ReadJoystick) */
+static int s_mouseCaptured = 1; /* the mouse is in relative mode, its cursor hidden (Platform_SetMouseCaptured) */
 
 /* SDL's log, also written to SheepD3D.log in the save folder (save_store.h), started afresh every run: on Windows the
  * game has no console, so the file is the only place a player can find SDL's errors. */
@@ -89,8 +93,10 @@ void *Platform_CreateWindow(const char *title, int width, int height, unsigned f
         return 0;
     }
     App_SetWindowIcon(s_window);
-    /* no cursor over the game, as the original's exclusive DirectInput mouse */
+    /* no cursor over the game, as the original's exclusive DirectInput mouse; relative mode keeps the mouse in the window
+     * and reports its motion past the screen's edges (the orbit camera turns with it) */
     SDL_HideCursor();
+    SDL_SetWindowRelativeMouseMode(s_window, true);
 #ifdef SDL_PLATFORM_WINDOWS
     return SDL_GetPointerProperty(SDL_GetWindowProperties(s_window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, 0);
 #else
@@ -130,6 +136,28 @@ unsigned Platform_PollEvents()
                 break;
             case SDL_EVENT_MOUSE_WHEEL:
                 s_wheel += (int)(e.wheel.y * 120.0f); /* DirectInput's units: 120 per notch */
+                if (Platform_IsActive() && s_mouseCaptured)
+                    s_scroll += e.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -e.wheel.y : e.wheel.y;
+                break;
+            /* controllers plugged in and out while the game runs: with none open, the new one is; when the open one
+             * goes, the first left is */
+            case SDL_EVENT_GAMEPAD_ADDED:
+                if (!s_gamepad && (s_gamepad = SDL_OpenGamepad(e.gdevice.which)) != 0)
+                    SDL_Log("SheepD3D: controller connected: %s", SDL_GetGamepadName(s_gamepad));
+                break;
+            case SDL_EVENT_GAMEPAD_REMOVED:
+                if (s_gamepad && SDL_GetGamepadID(s_gamepad) == e.gdevice.which) {
+                    SDL_Log("SheepD3D: controller disconnected");
+                    Platform_CloseJoystick();
+                    if (Platform_JoystickCount() > 0)
+                        Platform_OpenJoystick(0);
+                }
+                break;
+            case SDL_EVENT_MOUSE_MOTION:
+                if (Platform_IsActive() && s_mouseCaptured) {
+                    s_lookX += e.motion.xrel;
+                    s_lookY += e.motion.yrel;
+                }
                 break;
             case SDL_EVENT_KEY_DOWN:
                 /* full screen, for a window the renderer scales into (Direct3D 7 has its own display modes) */
@@ -378,6 +406,35 @@ int Platform_KeyName(unsigned dikCode, char *out, int outSize)
 }
 
 /* ---- the mouse ---- */
+void Platform_SetMouseCaptured(int captured)
+{
+    captured = captured != 0;
+    if (!s_window || captured == s_mouseCaptured)
+        return;
+    s_mouseCaptured = captured;
+    SDL_SetWindowRelativeMouseMode(s_window, captured);
+    if (captured)
+        SDL_HideCursor();
+    else
+        SDL_ShowCursor();
+    s_lookX = s_lookY = 0; /* nothing moved while it was free turns the camera */
+    s_scroll = 0;
+}
+
+int Platform_TakeMouseScroll()
+{
+    int notches = (int)s_scroll; /* whole notches; a trackpad's fractions add up to the next ones */
+    s_scroll -= notches;
+    return notches;
+}
+
+void Platform_TakeMouseLook(float *dx, float *dy)
+{
+    *dx = s_lookX;
+    *dy = s_lookY;
+    s_lookX = s_lookY = 0;
+}
+
 void Platform_ReadMouse(int *dx, int *dy, int *wheel, unsigned char buttons[4])
 {
     float x = 0, y = 0;
@@ -419,8 +476,6 @@ static const struct {
     {SDL_GAMEPAD_BUTTON_LEFT_STICK, SDL_GAMEPAD_AXIS_INVALID},       /* L3 */
     {SDL_GAMEPAD_BUTTON_RIGHT_STICK, SDL_GAMEPAD_AXIS_INVALID},      /* R3 */
 };
-
-static SDL_Gamepad *s_gamepad;
 
 int Platform_JoystickCount()
 {

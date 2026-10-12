@@ -140,8 +140,10 @@ void Pad_ReadRaw(Pad *pad)
         pad->raw.typeLen.type = g_pad.padType;
         pad->raw.leftX = g_inputMgr.axisX;
         pad->raw.leftY = g_inputMgr.axisY;
-        pad->raw.rightX = g_inputMgr.rightX; /* the original PC build left the right stick centred (no DirectInput axis
-        pad->raw.rightY = g_inputMgr.rightY;  * fed it): the camera code reads it as on the PlayStation */
+        /* the right stick: the original PC build left it centred (no DirectInput axis fed it); the camera code reads
+         * it as on the PlayStation */
+        pad->raw.rightX = g_inputMgr.rightX;
+        pad->raw.rightY = g_inputMgr.rightY;
         pad->raw.buttons = g_inputMgr.padBits;
     }
 }

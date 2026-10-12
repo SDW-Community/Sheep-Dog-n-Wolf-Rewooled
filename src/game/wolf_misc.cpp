@@ -17,6 +17,7 @@ class Instance;
 struct Animator;
 #include "../objects/animation.h"
 #include "../engine/progress_inventory.h"
+#include "../platform/platform.h"
 #include "wolf_api.h"
 
 extern EmitterDriftParams g_wolfDustParams, g_wolfTurnDustParams, g_wolfRocketFxParams, g_wolfLandDustParams,
@@ -789,6 +790,16 @@ s32 Wolf::SwapHeldItem(s32 animated, s32 needStateFlag)
     return result;
 }
 
+extern s32 g_dtRawMs;
+
+/* the mouse wheel on the item wheel: a notch opens it (as the inventory button), each notch turns it one item (down:
+ * the next), and a pause in the scrolling closes it with the item chosen (as releasing the button) */
+#define INVWHEEL_SCROLL_CLOSE_MS 700 /* the pause that closes a wheel the mouse opened */
+#define INVWHEEL_SCROLL_QUEUE 3      /* the most notches waiting for the wheel to finish a turn */
+static u8 s_wheelByScroll;           /* the open wheel was opened by the mouse wheel, not the button */
+static s32 s_wheelScrollQueue;       /* notches still to turn: positive the next items, negative the previous */
+static s32 s_wheelScrollCloseMs;     /* time left before a mouse-opened wheel closes */
+
 /* the item wheel, every frame from Wolf_Update. On foot: the inventory button's press edge opens the wheel
  * when the state has flag 0x100 and Wolf_CanUseInventory; while it is open, left/right turn it (not while it is still
  * rotating) and releasing the button closes it and returns 1 (the caller then calls Wolf_SwapHeldItem(1, 1)); losing
@@ -799,6 +810,8 @@ s32 Wolf::QuickInventory(Pad *pad)
     WolfStateDesc *desc;
     s32 allowed;
     s32 result; /* the names order the frame: result -4, allowed -8, desc -0xc, wheelOpen -0x10 */
+    s32 scroll = -Platform_TakeMouseScroll(); /* taken every frame, so no old notch opens the wheel later */
+    u8 buttonHeld = !(pad->cur.buttons & ~g_padMasks[6]);
     result = 0;
     switch (mode) {
         case WOLF_MODE_NORMAL:
@@ -807,28 +820,63 @@ s32 Wolf::QuickInventory(Pad *pad)
             wheelOpen = g_gameFlags & GF_ITEM_WHEEL_OPEN;
             if (wheelOpen) {
                 if (allowed) {
+                    if (buttonHeld)
+                        s_wheelByScroll = 0; /* the button took it over: releasing it closes the wheel */
+                    if (scroll) {
+                        s_wheelScrollQueue += scroll;
+                        if (s_wheelScrollQueue > INVWHEEL_SCROLL_QUEUE)
+                            s_wheelScrollQueue = INVWHEEL_SCROLL_QUEUE;
+                        if (s_wheelScrollQueue < -INVWHEEL_SCROLL_QUEUE)
+                            s_wheelScrollQueue = -INVWHEEL_SCROLL_QUEUE;
+                        s_wheelScrollCloseMs = INVWHEEL_SCROLL_CLOSE_MS;
+                    }
                     if (!InvWheel_IsRotating()) {
                         if (Pad_MenuHeld((u16)~PAD_LEFT))
                             Inventory_SelectPrev();
                         else if (Pad_MenuHeld((u16)~PAD_RIGHT))
                             Inventory_SelectNext();
+                        else if (s_wheelScrollQueue > 0) {
+                            s_wheelScrollQueue--;
+                            Inventory_SelectNext();
+                        } else if (s_wheelScrollQueue < 0) {
+                            s_wheelScrollQueue++;
+                            Inventory_SelectPrev();
+                        }
                     }
-                    if (pad->cur.buttons & ~g_padMasks[6]) {
+                    if (s_wheelByScroll) {
+                        /* opened by the mouse wheel: closed once the scrolling has paused and the wheel stopped */
+                        if (s_wheelScrollCloseMs > 0)
+                            s_wheelScrollCloseMs -= g_dtRawMs;
+                        if (s_wheelScrollCloseMs <= 0 && !s_wheelScrollQueue && !InvWheel_IsRotating()) {
+                            Inventory_SetWheelOpen(0);
+                            s_wheelByScroll = 0;
+                            result = 1;
+                        }
+                    } else if (!buttonHeld) {
                         Inventory_SetWheelOpen(0);
+                        s_wheelScrollQueue = 0;
                         result = 1;
                     }
                 } else {
                     Inventory_SetWheelOpen(0);
+                    s_wheelByScroll = 0;
+                    s_wheelScrollQueue = 0;
                     result = 1;
                 }
-            } else if (!(pad->cur.buttons & ~g_padMasks[6]) && (pad->prev.buttons & ~g_padMasks[6]) && allowed &&
-                       !(g_gameFlags & GF_ITEM_FLY)) {
+            } else if (allowed && !(g_gameFlags & GF_ITEM_FLY) &&
+                       ((buttonHeld && (pad->prev.buttons & ~g_padMasks[6])) || scroll)) {
+                /* the button's press edge, or a notch of the mouse wheel (which also turns it that notch) */
                 Inventory_ClearSelection();
                 Inventory_SetWheelOpen(1);
+                s_wheelByScroll = !buttonHeld;
+                s_wheelScrollQueue = buttonHeld ? 0 : scroll;
+                s_wheelScrollCloseMs = INVWHEEL_SCROLL_CLOSE_MS;
             }
             break;
         case WOLF_MODE_CARRY:
             Inventory_SetWheelOpen(0);
+            s_wheelByScroll = 0;
+            s_wheelScrollQueue = 0;
     }
     return result;
 }

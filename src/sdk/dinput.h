@@ -9,18 +9,28 @@
 #define DIENUM_STOP 0
 #define DIERR_INPUTLOST ((HRESULT)0x8007001EL)      /* HRESULT_FROM_WIN32(ERROR_READ_FAULT) */
 #define DIERR_NOTINITIALIZED ((HRESULT)0x80070015L) /* MAKE_HRESULT(1, FACILITY_WIN32, ERROR_NOT_READY) */
+#define DIK_A 0x1E
 #define DIK_C 0x2E
+#define DIK_D 0x20
 #define DIK_DOWN 0xD0                               /* DownArrow on arrow keypad */
+#define DIK_E 0x12
+#define DIK_F12 0x58
 #define DIK_ESCAPE 0x01
 #define DIK_LCONTROL 0x1D
 #define DIK_LEFT 0xCB /* LeftArrow on arrow keypad */
+#define DIK_LSHIFT 0x2A
 #define DIK_NEXT 0xD1 /* PgDn on arrow keypad */
 #define DIK_P 0x19
 #define DIK_PAUSE 0xC5  /* Pause */
 #define DIK_PRIOR 0xC9  /* PgUp on arrow keypad */
+#define DIK_Q 0x10
 #define DIK_RETURN 0x1C /* Enter on main keyboard */
 #define DIK_RIGHT 0xCD  /* RightArrow on arrow keypad */
+#define DIK_S 0x1F
+#define DIK_TAB 0x0F
 #define DIK_UP 0xC8     /* UpArrow on arrow keypad */
+#define DIK_W 0x11
+#define DIK_X 0x2D
 #define DIPH_BYID 2
 #define DIPH_BYOFFSET 1
 #define DIPROP_KEYNAME MAKEDIPROP(20)

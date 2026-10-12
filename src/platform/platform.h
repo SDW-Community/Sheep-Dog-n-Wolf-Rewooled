@@ -73,6 +73,15 @@ int Platform_KeyName(unsigned dikCode, char *out, int outSize);
 
 /* The mouse: its motion and wheel since the previous call, and its buttons (left, right, middle, X1). */
 void Platform_ReadMouse(int *dx, int *dy, int *wheel, unsigned char buttons[4]);
+/* The mouse's motion since the previous call, in pixels (right and down positive), for the orbit camera: counted apart
+ * from Platform_ReadMouse's, so neither takes the other's. 0 while the window has no focus. */
+void Platform_TakeMouseLook(float *dx, float *dy);
+/* captured (the default): the mouse in relative mode, its cursor hidden, its motion turning the orbit camera; not: the
+ * cursor shown and free (the pause menu). Cheap to call every frame: it acts only on a change. */
+void Platform_SetMouseCaptured(int captured);
+/* The mouse wheel's whole notches since the previous call (up, away from the player, positive; a "natural scrolling"
+ * setting undone), for the item wheel: counted apart from Platform_ReadMouse's. 0 while the mouse is not captured. */
+int Platform_TakeMouseScroll();
 
 /* Controllers: SDL's gamepads (its standard layout), in SDL's order. Platform_ReadJoystick: the left stick as the X and
  * Y axes in -65535..65535 (DirectInput's range as the game set it; Z is 0), the right stick as axes 3 and 4 (same
