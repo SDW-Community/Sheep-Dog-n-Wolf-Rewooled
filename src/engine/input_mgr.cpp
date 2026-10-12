@@ -568,7 +568,6 @@ static u8 InputMgr_PadInUse(InputMgr *m)
 long InputMgr::Poll()
 {
     u16 nav;
-    u8 slot;
     u8 escDown;
     u8 slot;
     if (CheckDevices() == 1) {
