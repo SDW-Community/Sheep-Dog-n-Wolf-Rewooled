@@ -28,6 +28,7 @@ class Mat44;
 #include "draw2d.h"
 #include "../app/app_main.h"
 #include "../platform/platform.h"
+#include "input/input_actions.h"
 
 /* ---- globals ---- */
 extern u32 *g_screenLayerBase0; /* u32 *, as its definition (src/app/app_main.cpp) declares it */
@@ -95,6 +96,7 @@ void Game_ReloadLevel()
     g_screen.Init(0);
     g_screen.Clear(0);
     ((GameState *)&g_animDt)->Game_ResetState();
+    Input_ResetContexts(); /* a menu or minigame left open by the previous level owns no input in this one */
     Scenaric_AllocLevelHeap();
     PauseMenu_Build();
     PausedMenu_Build();

@@ -62,6 +62,9 @@ u8 Reg_WriteBinary(HKEY key, const char *name, const void *data, DWORD size);
 
 #include "draw2d.h"
 #include "../objects/camera.h"
+#include "../platform/save_store.h"
+#include "input/input_actions.h"
+#include "input.h"
 extern s32 g_dtRawMs;
 
 /* A keyboard key the bindings may not take (Pause, P, Enter, Esc). Written as a conditional expression: its value is
@@ -363,6 +366,174 @@ static const u16 s_slotPadBit[12] = {PAD_TRIANGLE, PAD_CIRCLE, PAD_CROSS,  PAD_S
 /* whether a controller answered this frame (CheckDevices): its buttons count, and it may be the current device */
 static u8 s_padConnected;
 
+extern u16 g_inputMap[16]; /* the actions' pad masks (input.cpp): g_inputMap[4 + n] is g_padMasks[n] */
+extern s32 g_rawTimeMs;
+
+/* running by repeated taps on a movement key: the same key pressed INPUT_RUN_TAPS times, each within INPUT_TAP_GAP_MS of
+ * the one before, the last one then held (fewer would trigger while stepping carefully across platforms).
+ * The game runs while the run button is TAPPED (Wolf::RunTapCheck: each tap 0.1 to 0.75 s after the last keeps the run,
+ * a faster one cancels it, none ends it), so while the key is held the run button is tapped every INPUT_RUN_TAP_MS;
+ * letting the key go stops the taps, and the Wolf, no longer steered, stops. */
+#define INPUT_RUN_TAPS 3      /* the presses that start a run */
+#define INPUT_TAP_GAP_MS 300  /* the longest gap between two of them */
+#define INPUT_RUN_TAP_MS 400 /* inside the game's window of 0.1 to 0.75 s (WolfMoveBank params[5], params[6]) */
+#define INPUT_RUN_ACTION 9   /* the run action's g_padMasks index (ScnControllable::ReadPad) */
+static u16 s_tapKey;         /* the movement key tapped last, when (g_rawTimeMs), and its presses in a row so far */
+static s32 s_tapTime;
+static u8 s_tapCount;
+static u16 s_runKey;         /* the movement key held after its taps: running while it is held; 0 none */
+static s32 s_runTapTime;     /* when the run button was last tapped for it */
+static u8 s_moveKeyWasDown[4];
+
+/* stopping a run with the opposite movement key (W after S, A after D, and back): while the key run with is held, or
+ * within the game's run window after it was let go, pressing the opposite one asks the Wolf to stop running
+ * (Input_TakeRunCancel, read by its running states) instead of turning around at a run */
+#define INPUT_RUN_DIR_NONE 0xff
+#define INPUT_RUN_AFTER_MS 750      /* the game's run window: a run lasts this long after the last run tap */
+#define INPUT_RUN_CANCEL_TTL_MS 150 /* a cancel not taken by then is dropped (the Wolf was not running) */
+static u8 s_runDirSlot = INPUT_RUN_DIR_NONE; /* the slot (0 up, 1 right, 2 down, 3 left) of the key run with */
+static s32 s_runDirTime;                     /* when that key was last held */
+static u8 s_runCancel;
+static s32 s_runCancelTime;
+
+u8 Input_TakeRunCancel()
+{
+    u8 cancel = s_runCancel && g_rawTimeMs >= s_runCancelTime && g_rawTimeMs - s_runCancelTime <= INPUT_RUN_CANCEL_TTL_MS;
+    s_runCancel = 0;
+    return cancel;
+}
+
+/* whether a mouse button (0 left, 1 right, 2 middle, 3 X1) is bound to one of the twelve buttons in the keyboard's
+ * table (the controls menu can bind the mouse's buttons) */
+u8 Input_IsMouseButtonBound(u8 button)
+{
+    u8 slot;
+    if (!g_inputMgr.device3)
+        return 0;
+    for (slot = INPUT_BIND_TRIANGLE; slot <= INPUT_BIND_R3; slot++)
+        if (g_inputMgr.keyTable[slot].dev == g_inputMgr.device3 && g_inputMgr.keyTable[slot].code == button)
+            return 1;
+    return 0;
+}
+
+/* the movement keys' taps forgotten: no run under way, none counted */
+static void InputMgr_ResetTapRun()
+{
+    s_tapKey = 0;
+    s_tapCount = 0;
+    s_runKey = 0;
+    s_runDirSlot = INPUT_RUN_DIR_NONE;
+    s_runCancel = 0;
+}
+
+/* "Legacy Controls" (the pause menu's controls page; saved as CfgGame\LegacyControls, one byte): the controls as the
+ * port had them before the camera and input overhaul.
+ *   - the follow camera as the game made it: g_camOrbit and g_camFreeYaw off (camera.cpp), the mouse not captured (so
+ *     neither it nor its wheel does anything: Main_Loop);
+ *   - no running by tapping a movement key, no stopping with the opposite one (InputMgr_TapRun);
+ *   - the disc's keyboard layout, only sneak moved from Left Ctrl to C (ApplyDefaultKeyChanges).
+ * The controller, the keyboard and controller together, and the camera sliders are the same in both. */
+u8 g_legacyControls;
+static u8 s_legacyControlsLoaded;
+
+static void InputMgr_ApplyLegacyControls()
+{
+    g_camOrbit = !g_legacyControls;
+    g_camFreeYaw = !g_legacyControls;
+    InputMgr_ResetTapRun();
+}
+
+/* once, before the first bindings are loaded: their defaults depend on it */
+static void InputMgr_LoadLegacyControls()
+{
+    SaveKey *key;
+    u8 value = 0;
+    unsigned type = 0, size = sizeof(value);
+    if (s_legacyControlsLoaded)
+        return;
+    s_legacyControlsLoaded = 1;
+    if (Save_KeyExists("CfgGame") && (key = Save_OpenKey("CfgGame")) != 0) {
+        if (Save_QueryValue(key, "LegacyControls", &type, &value, &size) == SAVE_OK && type == 3 && size == 1 &&
+            value <= 1)
+            g_legacyControls = value;
+        Save_CloseKey(key);
+    }
+    InputMgr_ApplyLegacyControls();
+}
+
+/* switches the controls (the pause menu's item). The saved key bindings are wiped (the Config key holds only them)
+ * and the defaults of the new controls loaded in their place, as the "this resets your keys" item says. */
+void Input_SetLegacyControls(u8 on)
+{
+    SaveKey *key;
+    u8 device;
+    g_legacyControls = on ? 1 : 0;
+    s_legacyControlsLoaded = 1;
+    if ((key = Save_OpenKey("CfgGame")) != 0) {
+        Save_SetValue(key, "LegacyControls", 3 /* REG_BINARY */, &g_legacyControls, 1);
+        Save_CloseKey(key);
+    }
+    Save_DeleteKey("Config");
+    Input_ForgetBindings(ICTX_GAMEPLAY); /* the player's keys too: the new controls' or the legacy ones' defaults */
+    device = g_inputMgr.GetCurrentDeviceIdx();
+    g_inputMgr.LoadConfig(g_dirReference);
+    g_inputMgr.SelectDevice(device);
+    InputMgr_ApplyLegacyControls();
+}
+
+/* the repeated taps on the keyboard's four movement keys (the menu direction slots): returns whether the run button is
+ * tapped this frame (the same answer for every Poll of a frame: g_rawTimeMs only moves between frames) */
+static u8 InputMgr_TapRun(InputMgr *m)
+{
+    u8 slot, down;
+    u16 code;
+    for (slot = 0; slot < 4; slot++) {
+        code = m->keyTable[INPUT_BIND_MENU_UP + slot].code;
+        down = code < m->keyboard->buttonCount && m->keyboard->buttonDown[code];
+        if (down && !s_moveKeyWasDown[slot] && s_runDirSlot != INPUT_RUN_DIR_NONE && slot == ((s_runDirSlot + 2) & 3) &&
+            g_rawTimeMs >= s_runDirTime && g_rawTimeMs - s_runDirTime <= INPUT_RUN_AFTER_MS) {
+            /* the opposite key: stop running, and no tap counted from this press */
+            s_runCancel = 1;
+            s_runCancelTime = g_rawTimeMs;
+            s_runKey = 0;
+            s_runDirSlot = INPUT_RUN_DIR_NONE;
+            s_tapKey = 0;
+            s_tapCount = 0;
+            s_moveKeyWasDown[slot] = down;
+            continue;
+        }
+        if (down && !s_moveKeyWasDown[slot]) {
+            s32 since = g_rawTimeMs - s_tapTime;
+            if (code == s_tapKey && since >= 0 && since <= INPUT_TAP_GAP_MS)
+                s_tapCount++;
+            else
+                s_tapCount = 1; /* another key, or too late: counting again from this press */
+            if (s_tapCount >= INPUT_RUN_TAPS) {
+                s_runKey = code;
+                s_runDirSlot = slot;
+                s_runTapTime = g_rawTimeMs - INPUT_RUN_TAP_MS; /* the first tap at once */
+                s_tapCount = 0;
+            }
+            s_tapKey = code;
+            s_tapTime = g_rawTimeMs;
+        }
+        s_moveKeyWasDown[slot] = down;
+    }
+    if (s_runKey && !(s_runKey < m->keyboard->buttonCount && m->keyboard->buttonDown[s_runKey]))
+        s_runKey = 0; /* let go: no more taps */
+    if (s_runKey)
+        s_runDirTime = g_rawTimeMs; /* the opposite key cancels until INPUT_RUN_AFTER_MS after this */
+    if (!s_runKey)
+        return 0;
+    if (g_rawTimeMs == s_runTapTime)
+        return 1; /* this frame's tap, for the frame's other Poll */
+    if (g_rawTimeMs - s_runTapTime >= INPUT_RUN_TAP_MS || g_rawTimeMs < s_runTapTime) {
+        s_runTapTime = g_rawTimeMs;
+        return 1;
+    }
+    return 0;
+}
+
 /* whether a binding's button is held: its device exists and has that button */
 static u8 InputMgr_SlotHeld(const InputBinding *b)
 {
@@ -399,23 +570,26 @@ static u8 InputMgr_PadInUse(InputMgr *m)
 long InputMgr::Poll()
 {
     u16 nav;
-    u8 slot;
     u8 escDown;
+    u8 slot;
     if (CheckDevices() == 1) {
         escDown = keyboard->buttonPressed[DIK_ESCAPE];
         if (joystick && joystick->buttonCount > INPUT_BIND_START) {
             /* Read held state so opening a menu (allowHeld = 0) cannot retrigger Start as Esc. */
-            if (current == joystick && joystick->buttonDown[INPUT_BIND_START] &&
+            if (s_padConnected && joystick->buttonDown[INPUT_BIND_START] &&
                 !joystick->buttonBlocked[INPUT_BIND_START])
                 escDown = 1;
         }
         padBits = 0xffff;
         rightX = rightY = 0x80; /* centred unless an analog device has a right stick */
+        /* the right stick (the camera) whenever a controller is connected, whichever device moves the player */
+        if (s_padConnected) {
+            rightX = InputMgr_StickByte(g_camInvertJoystick ? -joystick->axisRX : joystick->axisRX);
+            rightY = InputMgr_StickByte(joystick->axisRY);
+        }
         if (current->isDigital == 0) {
             axisX = (u8)(s32)(current->axisX * 128.0f) + 0x80;
             axisY = (u8)(s32)(current->axisY * 128.0f) + 0x80;
-            rightX = InputMgr_StickByte(g_camInvertJoystick ? -current->axisRX : current->axisRX);
-            rightY = InputMgr_StickByte(current->axisRY);
         } else {
             axisX = 0x80;
             axisY = 0x80;
@@ -434,6 +608,9 @@ long InputMgr::Poll()
             if (InputMgr_SlotHeld(&keyTable[slot]) || (s_padConnected && InputMgr_SlotHeld(&padTable[slot])))
                 padBits &= (u16)~s_slotPadBit[slot];
         }
+        /* a movement key held after its taps: the run action's button tapped, wherever the controls put it
+        if (!g_legacyControls && InputMgr_TapRun(this))
+            padBits &= g_inputMap[4 + INPUT_RUN_ACTION]; */
         nav = PAD_ALL_RELEASED;
         escPressed = !escPrev && escDown ? 1 : 0;
         enterPressed = !enterPrev && keyboard->buttonPressed[DIK_RETURN] ? 1 : 0;
@@ -562,6 +739,7 @@ u8 InputMgr::LoadConfig(const char *dir)
 {
     u8 ok = 1;
     u8 devIdx = GetCurrentDeviceIdx();
+    InputMgr_LoadLegacyControls();
     if (LoadBindingTable(1, dir, "KeybConf") == 1) {
         if (LoadBindingTable(1, dir, "UserConf") == 1)
             SelectDevice(devIdx);
@@ -581,13 +759,45 @@ u8 InputMgr::LoadConfig(const char *dir)
 }
 
 /* The port's changes to the disc's default keyboard layout (DefKConf.BSC), applied only when the defaults are loaded:
- * a layout the player saved from the pause menu (KeybConf) is left as it is.
- *   - sneak (R1) moves from Left Ctrl to C: Ctrl + the arrow keys (movement) is taken by macOS for Mission Control and
- *     switching Spaces, before the game sees it. It moves on every OS, so the layout is the same everywhere. */
+ * a layout the player saved from the pause menu (KeybConf) is left as it is. With g_legacyControls only the first
+ * (sneak, to C rather than Left Shift: Left Shift stays looking around); otherwise:
+ *   - sneak (R1) moves from Left Ctrl to Left Shift: Ctrl + the movement keys is taken by macOS for Mission Control and
+ *     switching Spaces, before the game sees it. It moves on every OS, so the layout is the same everywhere. Looking
+ *     around (Triangle), on Left Shift, moves to C.
+ *   - movement moves from the arrow keys to W A S D, and so the camera's rotation (L2, R2) from A and S to Q and E.
+ *     The menus are still moved through with the arrow keys (Poll reads them as they are).
+ *   - the map (Select) moves from F12 to Tab.
+ * Running is also a movement key tapped INPUT_RUN_TAPS times and held (Poll). */
 void InputMgr::ApplyDefaultKeyChanges()
 {
+    if (g_legacyControls) {
+        if (keyTable[INPUT_BIND_R1].code == DIK_LCONTROL)
+            keyTable[INPUT_BIND_R1].code = DIK_C;
+        return;
+    }
+    if (keyTable[INPUT_BIND_CROSS].dev == keyboard && keyTable[INPUT_BIND_CROSS].code == DIK_X &&
+        device3 && (presentMask & INPUTDEV_MASK_MOUSE)) {
+        keyTable[INPUT_BIND_CROSS].dev = device3;
+        keyTable[INPUT_BIND_CROSS].code = 0; /* 0 left, 1 right, 2 middle, 3 X1 */
+    }
+    if (keyTable[INPUT_BIND_TRIANGLE].code == DIK_LSHIFT && keyTable[INPUT_BIND_R1].code == DIK_LCONTROL)
+        keyTable[INPUT_BIND_TRIANGLE].code = DIK_C;
     if (keyTable[INPUT_BIND_R1].code == DIK_LCONTROL)
-        keyTable[INPUT_BIND_R1].code = DIK_C;
+        keyTable[INPUT_BIND_R1].code = DIK_LSHIFT;
+    if (keyTable[INPUT_BIND_SELECT].code == DIK_F12)
+        keyTable[INPUT_BIND_SELECT].code = DIK_TAB;
+    if (keyTable[INPUT_BIND_L2].code == DIK_A)
+        keyTable[INPUT_BIND_L2].code = DIK_Q;
+    if (keyTable[INPUT_BIND_R2].code == DIK_S)
+        keyTable[INPUT_BIND_R2].code = DIK_E;
+    if (keyTable[INPUT_BIND_MENU_UP].code == DIK_UP)
+        BindMenuKey(INPUT_BIND_MENU_UP, DIK_W);
+    if (keyTable[INPUT_BIND_MENU_LEFT].code == DIK_LEFT)
+        BindMenuKey(INPUT_BIND_MENU_LEFT, DIK_A);
+    if (keyTable[INPUT_BIND_MENU_DOWN].code == DIK_DOWN)
+        BindMenuKey(INPUT_BIND_MENU_DOWN, DIK_S);
+    if (keyTable[INPUT_BIND_MENU_RIGHT].code == DIK_RIGHT)
+        BindMenuKey(INPUT_BIND_MENU_RIGHT, DIK_D);
 }
 
 /* The controller's bindings are fixed: the controller device delivers the twelve PlayStation buttons already in the

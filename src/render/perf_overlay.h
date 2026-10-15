@@ -19,6 +19,7 @@
 
 void PerfOverlay_Toggle(); /* F3 (src/platform/platform_sdl.cpp) */
 void CamDebug_Toggle();     /* F5 (src/platform/platform_sdl.cpp) */
+void Input_DebugCycleContexts(); /* F6: the input contexts' stack (src/engine/input/input_actions.h) */
 int PerfOverlay_Enabled();
 
 /* the timing points: FrameStart when the limiter's wait ends (the game's work begins); PresentBegin / PresentEnd
@@ -28,7 +29,7 @@ void PerfOverlay_PresentBegin(u32 draws, u32 vertices);
 void PerfOverlay_PresentEnd();
 
 /* the overlay's text, one line per row; the number of lines (0 before the first half second is measured) */
-#define PERF_OVERLAY_MAX_LINES 5
+#define PERF_OVERLAY_MAX_LINES 7
 #define PERF_OVERLAY_LINE_SIZE 48
 int PerfOverlay_Lines(char lines[PERF_OVERLAY_MAX_LINES][PERF_OVERLAY_LINE_SIZE]);
 

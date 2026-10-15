@@ -108,6 +108,9 @@ int PolyBatcher_CompareSortZ(RenderPoly **a, RenderPoly **b);
 #define SDW_INLINE_D3DAPP_CLEARSTATEFLAGSINLINE_U32 1
 #include "../app/d3dapp_inlines.h"
 #include "psx_dav.h"
+#include "button_icons.h"
+#include "hud/hud_font.h"
+#include "hud/hud_icons.h"
 #undef SDW_INLINE_D3DAPP_CLEARSTATEFLAGSINLINE_U32
 /* the constructor without a texture file: pageCount pages, each an immediate page with its own batch
  * (0xc000 state flags). No caller; the loading constructor below is the one Load_DAVnWAR uses. */
@@ -326,6 +329,47 @@ s32 PolyBatcher::CreateTexture(const char *fileName, u32 index, u32 width, u32 h
     return result;
 }
 
+/* packed RGBA (bytes R, G, B, A, the usual opacity) into a TEXFMT_RGBA8 page of the same size. The game's alpha is
+ * transparency (its blending is INVSRCALPHA / SRCALPHA and its alpha test drops high alpha), so it is flipped. */
+static void PolyBatcher_FillRGBA8(Texture *page, const u8 *rgba, s32 w, s32 h)
+{
+    DDSURFACEDESC2 desc;
+    s32 row;
+    page->Surface_LockReadWrite(&desc);
+    for (row = 0; row < h; row++) {
+        u8 *to = (u8 *)desc.lpSurface + row * desc.lPitch;
+        const u8 *from = rgba + (size_t)row * w * 4;
+        s32 x;
+        for (x = 0; x < w * 4; x += 4) {
+            to[x] = from[x];
+            to[x + 1] = from[x + 1];
+            to[x + 2] = from[x + 2];
+            to[x + 3] = (u8)(255 - from[x + 3]);
+        }
+    }
+    page->Surface_Unlock();
+}
+
+/* a page the port adds (made from RGBA by `build`); 0 when the build has none or it cannot be made */
+static Texture *PolyBatcher_MakePortPage(D3DApp *renderer, u8 *(*build)(u32 *, u32 *))
+{
+    u32 w = 0, h = 0;
+    s32 err;
+    u8 *rgba = build(&w, &h);
+    Texture *page;
+    if (!rgba)
+        return 0;
+    page = new Texture(renderer, w, h, TEXFMT_RGBA8, &err);
+    if (err) {
+        delete page;
+        delete[] rgba;
+        return 0;
+    }
+    PolyBatcher_FillRGBA8(page, rgba, (s32)w, (s32)h);
+    delete[] rgba;
+    return page;
+}
+
 /* The texture override of page `index` of the page file davPath, made by tools/retexture.py:
  * <data folder>/<folder>/<level folder>/page_NN.png, for <data folder>/Levels/<level folder>/<name>.DAV, RGBA with the
  * usual alpha (opacity); folder is "retexture", or "retexture-psx" for a PlayStation .DAV (converted on load, its pages
@@ -337,10 +381,9 @@ static Texture *PolyBatcher_LoadPageOverride(D3DApp *renderer, const char *davPa
 {
     char path[SDW_PATH_MAX];
     s32 seps[3] = {-1, -1, -1}; /* the last three separators: before the file, the level folder, "Levels" */
-    s32 i, found = 0, w = 0, h = 0, err, row;
+    s32 i, found = 0, w = 0, h = 0, err;
     unsigned char *rgba;
     Texture *page;
-    DDSURFACEDESC2 desc;
     for (i = (s32)strlen(davPath) - 1; i >= 0 && found < 3; i--)
         if (davPath[i] == '/' || davPath[i] == '\\')
             seps[found++] = i;
@@ -366,21 +409,7 @@ static Texture *PolyBatcher_LoadPageOverride(D3DApp *renderer, const char *davPa
         Platform_FreeImage(rgba);
         return 0;
     }
-    /* the PNG's alpha is the usual opacity; the game's is transparency (its blending is INVSRCALPHA / SRCALPHA and its
-     * alpha test drops high alpha), so it is flipped */
-    page->Surface_LockReadWrite(&desc);
-    for (row = 0; row < h; row++) {
-        u8 *to = (u8 *)desc.lpSurface + row * desc.lPitch;
-        const u8 *from = rgba + (size_t)row * w * 4;
-        s32 x;
-        for (x = 0; x < w * 4; x += 4) {
-            to[x] = from[x];
-            to[x + 1] = from[x + 1];
-            to[x + 2] = from[x + 2];
-            to[x + 3] = (u8)(255 - from[x + 3]);
-        }
-    }
-    page->Surface_Unlock();
+    PolyBatcher_FillRGBA8(page, rgba, w, h);
     Platform_FreeImage(rgba);
     Platform_Log("texture override %s (%dx)", path, w / (s32)width);
     return page;
@@ -414,8 +443,10 @@ static Texture *PolyBatcher_ReadPage(D3DApp *renderer, BsStream &stream, const c
 }
 
 /* reads the VDX7 texture-page file: the immediate pages first (format bits 0x1c == 4), each with its own
- * batch buffer, then the sorted pages (0x08 alpha blend, 0x10 additive), then four blank 4x4 pages. Returns the
- * number of pages read, 0 when the file is missing, not VDX7, or a texture cannot be created. */
+ * batch buffer, then the sorted pages (0x08 alpha blend, 0x10 additive), then the port's controller icon page
+ * (g_buttonIconPage, when the build has the icons), then four blank 4x4 pages: those stay the last four, which the
+ * interface and the map draw into (texturePageCount - 1 .. - 4). Returns the number of pages read, 0 when the file is
+ * missing, not VDX7, or a texture cannot be created. */
 s32 PolyBatcher::LoadTexturePages(const char *path)
 {
     s32 total;
@@ -431,6 +462,9 @@ s32 PolyBatcher::LoadTexturePages(const char *path)
      * PlayStation's .DAV) leaves an empty batcher that the destructor can free */
     texturePageCount = 0;
     immediateTexCount = 0;
+    g_buttonIconPage = -1;
+    g_hudFontPage = -1;
+    g_hudIconPage = -1;
     textures = 0;
     texStateFlags = 0;
     texBatchVerts = 0;
@@ -452,8 +486,9 @@ s32 PolyBatcher::LoadTexturePages(const char *path)
             stream.ReadU16(1);
             stream.ReadU16(1);
             texturePageCount = stream.ReadU16(1);
-            textures = (Texture **)malloc((texturePageCount + 4) * sizeof(Texture *));
-            texStateFlags = new u32[texturePageCount + 4];
+            /* + the controller icons + the HUD font + the HUD icons + 4 blank */
+            textures = (Texture **)malloc((texturePageCount + 7) * sizeof(Texture *));
+            texStateFlags = new u32[texturePageCount + 7];
             stream.ReadU32(1);
             stream.ReadU32(1);
             stream.Seek(stream.ReadU32(1));
@@ -508,6 +543,29 @@ s32 PolyBatcher::LoadTexturePages(const char *path)
                 }
                 iPage++;
             } while (iPage < texturePageCount);
+            /* the controller icons (a sorted page: they have transparent edges) */
+            g_buttonIconPage = -1;
+            if ((textures[iPage] = PolyBatcher_MakePortPage(renderer, ButtonIcons_BuildPage)) != 0) {
+                texStateFlags[iPage] = RSF_BLEND_ALPHA | RSF_TEXTURED;
+                g_buttonIconPage = (s32)iPage;
+                Platform_Log("controller icons: page %u", (unsigned)iPage);
+                iPage++;
+                texturePageCount++;
+            }
+            /* the new HUD's font (src/engine/hud/hud_font.cpp): sorted too, it is alpha-blended */
+            if ((textures[iPage] = PolyBatcher_MakePortPage(renderer, HudFont_BuildPage)) != 0) {
+                texStateFlags[iPage] = RSF_BLEND_ALPHA | RSF_TEXTURED;
+                g_hudFontPage = (s32)iPage;
+                iPage++;
+                texturePageCount++;
+            }
+            /* the new HUD's PNG icons (src/engine/hud/hud_icons.cpp), read again every level: none, no page */
+            if ((textures[iPage] = PolyBatcher_MakePortPage(renderer, HudIcons_BuildPage)) != 0) {
+                texStateFlags[iPage] = RSF_BLEND_ALPHA | RSF_TEXTURED;
+                g_hudIconPage = (s32)iPage;
+                iPage++;
+                texturePageCount++;
+            }
             /* four blank 4x4 pages after the file's */
             for (k = 0; k < 4; k++) {
                 s32 xx;

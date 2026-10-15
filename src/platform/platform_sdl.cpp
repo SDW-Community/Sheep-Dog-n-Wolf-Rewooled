@@ -20,7 +20,11 @@ int Game_Main(int argc, char **argv); /* src/app/app_main.cpp */
 static SDL_Window *s_window;
 static unsigned s_flags;
 static int s_wheel; /* the mouse wheel since the last Platform_ReadMouse */
-static SDL_Gamepad *s_gamepad; /* the controller the game reads (Platform_ReadJoystick) */
+static float s_lookX, s_lookY; /* the mouse motion since the last Platform_TakeMouseLook (the orbit camera's) */
+static float s_scroll;         /* the wheel since the last Platform_TakeMouseScroll, in notches (the item wheel's) */
+static int s_rightClicks;      /* right button presses since the last Platform_TakeMouseRightClicks */
+static SDL_Gamepad *s_gamepad;  /* the controller the game reads (Platform_ReadJoystick) */
+static int s_mouseCaptured = 1; /* the mouse is in relative mode, its cursor hidden (Platform_SetMouseCaptured) */
 
 /* SDL's log, also written to SheepD3D.log in the save folder (save_store.h), started afresh every run: on Windows the
  * game has no console, so the file is the only place a player can find SDL's errors. */
@@ -90,8 +94,10 @@ void *Platform_CreateWindow(const char *title, int width, int height, unsigned f
         return 0;
     }
     App_SetWindowIcon(s_window);
-    /* no cursor over the game, as the original's exclusive DirectInput mouse */
+    /* no cursor over the game, as the original's exclusive DirectInput mouse; relative mode keeps the mouse in the window
+     * and reports its motion past the screen's edges (the orbit camera turns with it) */
     SDL_HideCursor();
+    SDL_SetWindowRelativeMouseMode(s_window, true);
 #ifdef SDL_PLATFORM_WINDOWS
     return SDL_GetPointerProperty(SDL_GetWindowProperties(s_window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, 0);
 #else
@@ -129,6 +135,11 @@ unsigned Platform_PollEvents()
             case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
                 result |= PLATFORM_EVENT_QUIT;
                 break;
+            case SDL_EVENT_MOUSE_WHEEL:
+                s_wheel += (int)(e.wheel.y * 120.0f); /* DirectInput's units: 120 per notch */
+                if (Platform_IsActive() && s_mouseCaptured)
+                    s_scroll += e.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -e.wheel.y : e.wheel.y;
+                break;
             /* controllers plugged in and out while the game runs: with none open, the new one is; when the open one
              * goes, the first left is */
             case SDL_EVENT_GAMEPAD_ADDED:
@@ -143,8 +154,15 @@ unsigned Platform_PollEvents()
                         Platform_OpenJoystick(0);
                 }
                 break;
-            case SDL_EVENT_MOUSE_WHEEL:
-                s_wheel += (int)(e.wheel.y * 120.0f); /* DirectInput's units: 120 per notch */
+            case SDL_EVENT_MOUSE_BUTTON_DOWN:
+                if (e.button.button == SDL_BUTTON_RIGHT && Platform_IsActive() && s_mouseCaptured)
+                    s_rightClicks++;
+                break;
+            case SDL_EVENT_MOUSE_MOTION:
+                if (Platform_IsActive() && s_mouseCaptured) {
+                    s_lookX += e.motion.xrel;
+                    s_lookY += e.motion.yrel;
+                }
                 break;
             case SDL_EVENT_KEY_DOWN:
                 /* full screen, for a window the renderer scales into (Direct3D 7 has its own display modes) */
@@ -156,6 +174,9 @@ unsigned Platform_PollEvents()
                     PerfOverlay_Toggle();
                 if (e.key.key == SDLK_F5 && !e.key.repeat)
                     CamDebug_Toggle();
+                /* the input contexts' stack, to watch it on the F3 overlay (src/engine/input/input_actions.h) */
+                if (e.key.key == SDLK_F6 && !e.key.repeat)
+                    Input_DebugCycleContexts();
                 break;
         }
     }
@@ -226,20 +247,16 @@ int Platform_ResolvePath(const char *path, char *out, int capacity)
 #endif
 }
 
-unsigned char *Platform_LoadImageRGBA(const char *path, int *width, int *height)
+/* a loaded surface as packed RGBA (the surface destroyed); 0 when it cannot be converted */
+static unsigned char *Platform_SurfaceToRGBA(SDL_Surface *loaded, const char *what, int *width, int *height)
 {
-    char resolved[4096];
-    SDL_Surface *loaded, *rgba;
+    SDL_Surface *rgba;
     unsigned char *pixels = 0;
     int row;
-    if (!Platform_ResolvePath(path, resolved, sizeof(resolved)))
-        return 0;
-    if (!(loaded = SDL_LoadPNG(resolved)))
-        return 0; /* most often: no such file, the normal case for a page without an override */
     rgba = SDL_ConvertSurface(loaded, SDL_PIXELFORMAT_RGBA32);
     SDL_DestroySurface(loaded);
     if (!rgba) {
-        SDL_Log("SheepD3D: %s: %s", resolved, SDL_GetError());
+        SDL_Log("SheepD3D: %s: %s", what, SDL_GetError());
         return 0;
     }
     if ((pixels = (unsigned char *)SDL_malloc((size_t)rgba->w * rgba->h * 4)) != 0) {
@@ -251,6 +268,27 @@ unsigned char *Platform_LoadImageRGBA(const char *path, int *width, int *height)
     }
     SDL_DestroySurface(rgba);
     return pixels;
+}
+
+unsigned char *Platform_LoadImageRGBA(const char *path, int *width, int *height)
+{
+    char resolved[4096];
+    SDL_Surface *loaded;
+    if (!Platform_ResolvePath(path, resolved, sizeof(resolved)))
+        return 0;
+    if (!(loaded = SDL_LoadPNG(resolved)))
+        return 0; /* most often: no such file, the normal case for a page without an override */
+    return Platform_SurfaceToRGBA(loaded, resolved, width, height);
+}
+
+unsigned char *Platform_DecodeImageRGBA(const void *png, int size, int *width, int *height)
+{
+    SDL_Surface *loaded = SDL_LoadPNG_IO(SDL_IOFromConstMem(png, (size_t)size), true);
+    if (!loaded) {
+        SDL_Log("SheepD3D: embedded image: %s", SDL_GetError());
+        return 0;
+    }
+    return Platform_SurfaceToRGBA(loaded, "embedded image", width, height);
 }
 
 void Platform_FreeImage(unsigned char *pixels)
@@ -393,6 +431,43 @@ int Platform_KeyName(unsigned dikCode, char *out, int outSize)
 }
 
 /* ---- the mouse ---- */
+void Platform_SetMouseCaptured(int captured)
+{
+    captured = captured != 0;
+    if (!s_window || captured == s_mouseCaptured)
+        return;
+    s_mouseCaptured = captured;
+    SDL_SetWindowRelativeMouseMode(s_window, captured);
+    if (captured)
+        SDL_HideCursor();
+    else
+        SDL_ShowCursor();
+    s_lookX = s_lookY = 0; /* nothing moved while it was free turns the camera */
+    s_scroll = 0;
+    s_rightClicks = 0;
+}
+
+int Platform_TakeMouseScroll()
+{
+    int notches = (int)s_scroll; /* whole notches; a trackpad's fractions add up to the next ones */
+    s_scroll -= notches;
+    return notches;
+}
+
+int Platform_TakeMouseRightClicks()
+{
+    int clicks = s_rightClicks;
+    s_rightClicks = 0;
+    return clicks;
+}
+
+void Platform_TakeMouseLook(float *dx, float *dy)
+{
+    *dx = s_lookX;
+    *dy = s_lookY;
+    s_lookX = s_lookY = 0;
+}
+
 void Platform_ReadMouse(int *dx, int *dy, int *wheel, unsigned char buttons[4])
 {
     float x = 0, y = 0;
@@ -505,6 +580,53 @@ unsigned Platform_ReadJoystickDpad()
     if (SDL_GetGamepadButton(s_gamepad, SDL_GAMEPAD_BUTTON_DPAD_LEFT))
         directions |= PLATFORM_DPAD_LEFT;
     return directions;
+}
+
+int Platform_JoystickFamily()
+{
+    if (!s_gamepad || !SDL_GamepadConnected(s_gamepad))
+        return PLATFORM_PAD_NONE;
+    switch (SDL_GetGamepadType(s_gamepad)) {
+        case SDL_GAMEPAD_TYPE_XBOX360:
+            return PLATFORM_PAD_XBOX360;
+        case SDL_GAMEPAD_TYPE_XBOXONE:
+            return PLATFORM_PAD_XBOXONE;
+        case SDL_GAMEPAD_TYPE_PS3:
+            return PLATFORM_PAD_PS3;
+        case SDL_GAMEPAD_TYPE_PS4:
+            return PLATFORM_PAD_PS4;
+        case SDL_GAMEPAD_TYPE_PS5:
+            return PLATFORM_PAD_PS5;
+        case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_PRO:
+            return PLATFORM_PAD_SWITCH_PRO;
+        case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_LEFT:
+        case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_RIGHT:
+            return PLATFORM_PAD_JOYCON_SINGLE;
+        case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_PAIR:
+            return PLATFORM_PAD_JOYCON_PAIR;
+        case SDL_GAMEPAD_TYPE_GAMECUBE:
+            return PLATFORM_PAD_GAMECUBE;
+        default:
+            return PLATFORM_PAD_GENERIC;
+    }
+}
+
+int Platform_JoystickFaceButton(int slot)
+{
+    if (slot < 0 || slot >= (int)SDL_arraysize(s_padMapping))
+        return -1;
+    switch (s_padMapping[slot].button) {
+        case SDL_GAMEPAD_BUTTON_WEST:
+            return PLATFORM_FACE_WEST;
+        case SDL_GAMEPAD_BUTTON_NORTH:
+            return PLATFORM_FACE_NORTH;
+        case SDL_GAMEPAD_BUTTON_EAST:
+            return PLATFORM_FACE_EAST;
+        case SDL_GAMEPAD_BUTTON_SOUTH:
+            return PLATFORM_FACE_SOUTH;
+        default:
+            return -1;
+    }
 }
 
 int Platform_ReadJoystick(int axes[5], unsigned char *buttons, int buttonCount)

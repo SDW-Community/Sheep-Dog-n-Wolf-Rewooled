@@ -13,6 +13,12 @@ struct Trajectory;
 class box;
 
 extern s16 g_camMinPitch;
+extern u8 g_camFreeYaw;            /* only the player turns the player's cameras: no zone or wall turns them (camera.cpp) */
+extern u8 g_camOrbit;              /* the orbit camera: turned by the mouse and the right stick only, no collision */
+extern float g_camMouseSensitivity; /* the orbit camera's angle units (4096 a turn) per pixel of mouse motion */
+extern float g_camOrbitSmoothing;   /* the orbit camera's easing toward the mouse, in seconds; 0: none */
+extern float g_camStickYawSpeed;   /* the orbit camera's right-stick turn at full tilt, angle units a second */
+extern float g_camStickPitchSpeed;
 extern u8 g_camMode;            /* CameraMode (CAM_LOOK = look mode) */
 extern s16 g_camReqDist;
 extern s16 g_camReqFocal;
@@ -27,7 +33,7 @@ extern u8 g_camSpeedSetting;
 extern u8 g_camAccelerationSetting;
 extern u8 g_camInvertJoystick;
 void Camera_SaveControlSettings();
-void Camera_ApplyRestriction(Vec3s *, s32 *, s16 *, s16 *, const CamRestrict *);
+void Camera_ApplyRestriction(Vec3s *, s32 *, s16 *, s16 *, const CamRestrict *, s32 freeYaw);
 void Camera_BuildViewMatrix(Camera *, const Vec3s *);
 void Camera_ClampToTrajectory(Vec3s *, Trajectory *, s32);
 void Camera_EaseFocal(s16, s16, u16);
@@ -62,6 +68,7 @@ void Camera_UpdateDirected(Camera *, Pad *);
 void Camera_UpdateFollow(Camera *, Pad *);
 void Camera_UpdateLedgeLook(Camera *);
 void Camera_UpdateLook(Camera *, Pad *);
+void Camera_UpdateOrbit(Camera *, Pad *);
 void Camera_UpdateRocket(Camera *, Pad *);
 void Camera_UpdateScriptBlendIn(Camera *);
 void Camera_UpdateScriptToScript(Camera *);

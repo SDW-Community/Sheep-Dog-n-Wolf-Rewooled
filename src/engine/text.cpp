@@ -64,6 +64,7 @@ struct DavDirectory {
 #include "game_state.h"
 #include "screen.h"
 #include "draw2d.h"
+#include "button_icons.h"
 s32 Rand_Bounded(s32 bound);
 u16 Str_Length(const char *s);
 uptr *Res_GetValidatedIdList(u16 resId, u16 *outCount);
@@ -1781,6 +1782,15 @@ s32 Text_ExpandMemCardToken(const char *tok, char *out, u16 *len)
     return 0;
 }
 
+/* whether the current font draws from the game font's sheet (the game font or a copy of it with another advance,
+ * Font_CloneResized): the sheet with the PlayStation button glyphs */
+static s32 Text_IsGameFontSheet()
+{
+    const Font *game = &g_fonts[FONT_GAME];
+    return g_pCurFont->texPage == game->texPage && g_pCurFont->sheetU == game->sheetU &&
+           g_pCurFont->sheetV == game->sheetV;
+}
+
 /* draws one glyph (despite the table name): a textured quad of the current font's cell for character c at window position
  * x, y (HUD units), depth z, colour rgb, clipped to the text window by shrinking the quad and its UVs. The quad goes to
  * the PolyBatcher as two triangles through g_textGlyphPoly (Submit, expanded twice). */
@@ -1806,6 +1816,7 @@ void Text_DrawString(u8 c, s32 x, s32 y, float z, u32 rgb)
     s32 texU;
     s32 ch;
     s32 v0;
+    ButtonIcon icon;
 
     trimL = topCut = cutRight = cutBottom = 0;
     if (x + g_pCurFont->glyphWidth < 0)
@@ -1841,6 +1852,15 @@ void Text_DrawString(u8 c, s32 x, s32 y, float z, u32 rgb)
     g_textGlyphPoly.sortZ = z;
     wRecip = 1.0f / (g_pViewFrustum->nearZ);
     colour = Color_RgbToBgr(rgb);
+    /* a PlayStation button glyph: the controller's own icon when it has one (button_icons.cpp), in its own colours */
+    if (Text_IsGameFontSheet() && ButtonIcons_ForGlyph(c, &icon)) {
+        texU = icon.u;
+        v0 = icon.v;
+        glyphW = icon.w;
+        ch = icon.h;
+        g_textGlyphPoly.type = icon.page + 4;
+        colour = Color_RgbToBgr(icon.rgb);
+    }
     quad = (TlVertex *)g_textGlyphPoly.verts;
     quad[0].x = fx0;
     quad[0].y = Y0;

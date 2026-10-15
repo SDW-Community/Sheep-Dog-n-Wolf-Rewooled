@@ -83,6 +83,7 @@ struct CamResetPositions { /* the positions Camera_ResetMotion / Camera_Reset se
 #include "../engine/game_state.h"
 #include "../engine/draw2d.h"
 #include "../engine/maths.h"
+#include "../platform/platform.h"
 #include "../engine/screen.h"
 #include "../engine/scenaric.h"
 #include "../engine/input.h"
@@ -124,7 +125,7 @@ s16 Camera_FindClearDistance(const Vec3s *, const Vec3s *, s16);
 u16 Camera_SweepEyeBox(const Vec3s *, const s16 *, Vec3s *, const Vec3s *, Vec3s *);
 void Camera_ShakeOffset(Vec3s *);
 void Camera_OnManualRotate(s32);
-void Camera_ApplyRestriction(Vec3s *, s32 *, s16 *, s16 *, const CamRestrict *);
+void Camera_ApplyRestriction(Vec3s *, s32 *, s16 *, s16 *, const CamRestrict *, s32);
 void Camera_FollowTrajectory(Trajectory *, Vec3s *, s16 *, s32 *, s32);
 void Camera_SmoothToDesired(Camera *, Vec3s *, const s32 *, s16 *, s16, const Vec3s *, s32);
 s32 Camera_IsPointOnScreen(Camera *, Vec3s, s16, const Vec3s *, const Vec3s *, s32 *);
@@ -312,6 +313,21 @@ CamScriptState g_camScriptState = {0};       /* g_camScriptEye .. g_camPreScript
 s16 g_camPreScriptDist = 0;
 s32 g_camAutoPitchRate = 0;
 s32 g_camAutoYawRate = 0;
+/* only the player turns the player's cameras (follow, Sam chase):
+ *   - in the levels' camera zones (CameraRestriction) the zones' yaw arc, 90-degree snapping, mirroring and pad lock
+ *     are ignored; their pitch, distance, focal and aim still apply. Zones with a trajectory (a rail) are unchanged.
+ *   - Camera_SolveCollision does not start turning the camera away from walls (its side hits and its line-of-sight
+ *     probe); it still pulls the camera in, tilts it, and cuts when the camera is stuck.
+ * The scripted shots are unchanged. 0: the original behaviour. */
+u8 g_camFreeYaw = 1;
+/* the orbit camera (Camera_UpdateOrbit) in place of the follow camera: the mouse (and the right stick) turns it around
+ * the player, nothing else does, and it goes through walls. 0: the follow camera. */
+u8 g_camOrbit = 1;
+float g_camMouseSensitivity = 4.0f; /* angle units (4096 a turn) per pixel of mouse motion */
+float g_camStickYawSpeed = 2700.0f;  /* the orbit camera's turn with the right stick fully over, in angle units a second */
+float g_camStickPitchSpeed = 1400.0f; /* (4096 a turn: 2700 is about 240 degrees a second) */
+float g_camOrbitSmoothing = 0.05f;  /* the orbit camera's easing toward where the mouse put it, in seconds (the time it
+                                     * covers 63% of the way); 0: none, it moves at once */
 s32 g_camAutoRollRate = 0;
 s16 g_camZoomOut = 0;
 s8 g_camTurnState = 0;
@@ -992,7 +1008,9 @@ s32 Camera_ClampAngleToArc(s16 *angle, s16 low, s16 high)
     }
     return w.outside;
 }
-void Camera_ApplyRestriction(Vec3s *angles, s32 *speeds, s16 *distance, s16 *focal, const CamRestrict *restriction)
+/* freeYaw: the yaw is left as it is (g_camFreeYaw, for the player's cameras) */
+void Camera_ApplyRestriction(Vec3s *angles, s32 *speeds, s16 *distance, s16 *focal, const CamRestrict *restriction,
+                             s32 freeYaw)
 {
     struct Work {
         s16 unused, direct;
@@ -1003,7 +1021,9 @@ void Camera_ApplyRestriction(Vec3s *angles, s32 *speeds, s16 *distance, s16 *foc
     w.mode = g_camModeParams + g_camMode;
     if (Camera_ClampAngleToArc(&angles->x, restriction->pitchMin, restriction->pitchMax) && restriction->pitchSpeed)
         speeds[0] = restriction->pitchSpeed;
-    if (restriction->flags.mirrorYaw) {
+    if (freeYaw) {
+        w.changed = 0;
+    } else if (restriction->flags.mirrorYaw) {
         w.mirrored = angles->y;
         w.direct = w.mirrored;
         w.mirrorLow = (restriction->yawMin + 0x800) & 0xfff;
@@ -1353,7 +1373,8 @@ void Camera_SolveCollision(Camera *cam, Vec3s *angles, s16 distance, s32 enabled
                        (((g_camMode == CAM_FOLLOW || g_camMode == CAM_SAM_CHASE) && w.restriction->flags.modeFollow) ||
                         (g_camMode == CAM_ROBOT && w.restriction->flags.modeRobot) ||
                         (g_camMode == CAM_FOLLOW_RUN && w.restriction->flags.modeRun));
-    w.snapYaw = g_camReqFlags.snapYaw || (w.restrictActive && w.restriction->flags.snapYaw);
+    w.snapYaw = g_camReqFlags.snapYaw ||
+                (w.restrictActive && w.restriction->flags.snapYaw && (!g_camFreeYaw || w.restriction->trajectory));
     w.target.x = g_camReqTarget.x + g_camAimOffset.x;
     w.target.y = g_camReqTarget.y + g_camAimOffset.y;
     w.target.z = g_camReqTarget.z + g_camAimOffset.z;
@@ -1487,7 +1508,7 @@ void Camera_SolveCollision(Camera *cam, Vec3s *angles, s16 distance, s32 enabled
                     ++g_camBlockedCountA;
                     ++g_camBlockedCountB;
                 }
-            } else if (g_camTurnState != TURN_SIDE && (w.hitFlags & (CAMHIT_LEFT | CAMHIT_RIGHT)) &&
+            } else if (!g_camFreeYaw && g_camTurnState != TURN_SIDE && (w.hitFlags & (CAMHIT_LEFT | CAMHIT_RIGHT)) &&
                        g_camMode != CAM_DIRECTED) {
                 if (w.hitFlags & CAMHIT_LEFT)
                     g_camAutoYawRate = -g_camModeParams[0].yawSpeed;
@@ -1592,7 +1613,7 @@ void Camera_SolveCollision(Camera *cam, Vec3s *angles, s16 distance, s32 enabled
                                 if (g_camProbeYawOffset > 0x400)
                                     g_camTurnState = TURN_IDLE;
                             }
-                        } else if (!g_camAutoYawRate) {
+                        } else if (!g_camAutoYawRate && !g_camFreeYaw) {
                             g_camAutoRollRate = 0;
                             g_camAutoYawRate = ANGLE_DELTA(w.probeAngles.y, cam->rot.y) > 0
                                                    ? g_camModeParams[0].yawSpeed << 1
@@ -1835,6 +1856,7 @@ void Camera_UpdateSamChase(Camera *camera, Pad *pad)
         Vec3i speeds;
         u16 unused04;
         s16 yawDifference;
+        s32 freeYaw;
     } w;
     {
 #pragma pack(push, 4)
@@ -1854,9 +1876,10 @@ void Camera_UpdateSamChase(Camera *camera, Pad *pad)
                         (g_camMode == CAM_ROBOT && w.restriction->flags.modeRobot) ||
                         (g_camMode == CAM_FOLLOW_RUN && w.restriction->flags.modeRun));
         w.onTrajectory = w.restricted && w.restriction->trajectory;
-        w.noPad = (w.restricted && w.restriction->flags.forbidPad) || w.onTrajectory;
-        w.mirror = w.restricted && w.restriction->flags.mirrorYaw;
-        w.snap = g_camReqFlags.snapYaw || (w.restricted && w.restriction->flags.snapYaw);
+        w.freeYaw = g_camFreeYaw && !w.onTrajectory; /* the zone does not turn the camera */
+        w.noPad = (w.restricted && w.restriction->flags.forbidPad && !w.freeYaw) || w.onTrajectory;
+        w.mirror = w.restricted && w.restriction->flags.mirrorYaw && !w.freeYaw;
+        w.snap = g_camReqFlags.snapYaw || (w.restricted && w.restriction->flags.snapYaw && !w.freeYaw);
         w.side = 0;
         if (!w.noPad) {
             if (pad->cur.typeLen.type == PADTYPE_ANALOG)
@@ -1943,7 +1966,7 @@ void Camera_UpdateSamChase(Camera *camera, Pad *pad)
             w.speeds.y = w.speeds.y * g_camReqSpeedFactor >> 12;
         }
         if (w.restricted)
-            Camera_ApplyRestriction(&w.angles, &w.speeds.x, &w.distance, &w.focal, w.restriction);
+            Camera_ApplyRestriction(&w.angles, &w.speeds.x, &w.distance, &w.focal, w.restriction, w.freeYaw);
         if (w.onTrajectory)
             Camera_FollowTrajectory(w.restriction->trajectory, &w.angles, &w.distance, &w.speeds.x, w.snap);
         else {
@@ -2062,7 +2085,112 @@ void Camera_UpdateSamChase(Camera *camera, Pad *pad)
         g_camLedgeLookState = LEDGE_NONE;
     }
 }
-void Camera_UpdateFollow(Camera *camera, Pad *pad)
+
+/* the orbit camera's pitch range, in angle units (positive: above the player, looking down), and the directions mouse
+ * and stick motion turn it: flip a sign to invert that axis (the stick's yaw is the follow camera's) */
+#define CAM_ORBIT_PITCH_MIN (-0x180)
+#define CAM_ORBIT_PITCH_MAX 0x380
+#define CAM_ORBIT_MOUSE_YAW_SIGN (-1)
+#define CAM_ORBIT_YAW_SIGN (-1)
+#define CAM_ORBIT_PITCH_SIGN 1
+
+/* g_camOrbit: the camera turned only by the mouse and the right stick (or the shoulder buttons), around the player at
+ * the mode's distance, at once (no easing), through walls (no collision, no cut). The level's camera zones and rails do
+ * not apply; the scripted shots, other modes, are unchanged. The camera's own angles are the state, so it carries on
+ * from wherever a scripted shot left it. */
+/* the pad the orbit camera read last, for Camera_DebugLine */
+static const Pad *s_orbitDebugPad;
+/* the orbit camera stood aside for a top-down zone this frame (Camera_UpdateFollow) */
+static u8 s_camOrbitDeferred;
+
+/* the F3 overlay's camera line (src/render/perf_overlay.cpp): the right stick as the orbit camera read it (0..255,
+ * 128 the centre), the camera's pitch and yaw (4096 a turn; pitch signed), its mode, and whether the orbit runs */
+void Camera_DebugLine(char *out, int size)
+{
+    const Pad *pad = s_orbitDebugPad;
+    snprintf(out, size, "RSTICK %3u %3u PITCH %5d YAW %4d M%u%s", pad ? pad->cur.rightX : 128u,
+             pad ? pad->cur.rightY : 128u, (s16)(((g_camera.rot.x + 0x800) & 0xfff) - 0x800), g_camera.rot.y & 0xfff,
+             g_camMode, !g_camOrbit ? "" : s_camOrbitDeferred ? " TOP" : " ORB");
+}
+
+void Camera_UpdateOrbit(Camera *camera, Pad *pad)
+{
+    /* where the mouse and the stick put the camera (the target) and where it is (eased toward it), in fractions of an
+     * angle unit, so no motion is lost to rounding; and the angles last written, to notice when something else (a
+     * scripted shot) moved the camera, which the orbit then carries on from */
+    static float s_targetYaw, s_targetPitch, s_yaw, s_pitch;
+    static s16 s_lastYaw, s_lastPitch;
+    static u8 s_started;
+    CamModeParams *params = &g_camModeParams[g_camMode];
+    s32 side = 0, vertical = 0, stickX = 0, stickY = 0;
+    float mouseX, mouseY, seconds, ease;
+    Vec3s angles, target;
+    Vec3i speeds;
+    s16 distance, focal;
+
+    if (!s_started || camera->rot.y != s_lastYaw || camera->rot.x != s_lastPitch) {
+        s_started = 1;
+        s_yaw = s_targetYaw = camera->rot.y;
+        s_pitch = s_targetPitch = (s16)(((camera->rot.x + 0x800) & 0xfff) - 0x800);
+    }
+
+    s_orbitDebugPad = pad;
+    Platform_TakeMouseLook(&mouseX, &mouseY);
+    /* the right stick, whatever the pad's type (the input manager sends it whenever a controller is connected): its
+     * strength rising from the edge of its dead zone, as the player's movement reads the left stick */
+    if (Pad_AnalogToStick(pad->cur.rightX, pad->cur.rightY, &stickX, &stickY)) {
+        side = stickX;
+        vertical = stickY;
+    }
+    if (side == 0) {
+        if (!(pad->cur.buttons & ~g_padMasks[4]))
+            side = -256;
+        else if (!(pad->cur.buttons & ~g_padMasks[5]))
+            side = 256;
+    }
+    seconds = g_dt / 4096.0f;
+    s_targetYaw += CAM_ORBIT_MOUSE_YAW_SIGN * mouseX * g_camMouseSensitivity +
+                   CAM_ORBIT_YAW_SIGN * side / 256.0f * seconds * g_camStickYawSpeed;
+    s_targetPitch += CAM_ORBIT_PITCH_SIGN * (mouseY * g_camMouseSensitivity +
+                                             vertical / 256.0f * seconds * g_camStickPitchSpeed);
+    if (s_targetPitch < CAM_ORBIT_PITCH_MIN)
+        s_targetPitch = CAM_ORBIT_PITCH_MIN;
+    if (s_targetPitch > CAM_ORBIT_PITCH_MAX)
+        s_targetPitch = CAM_ORBIT_PITCH_MAX;
+
+    /* eased by the time the frame took, so the camera moves the same at any frame rate */
+    ease = g_camOrbitSmoothing > 0 ? 1.0f - (float)exp(-seconds / g_camOrbitSmoothing) : 1.0f;
+    s_yaw += (s_targetYaw - s_yaw) * ease;
+    s_pitch += (s_targetPitch - s_pitch) * ease;
+    /* the yaw turns without end: both kept near 0, a whole turn at a time */
+    if (s_yaw > 0x10000 || s_yaw < -0x10000) {
+        float turns = (float)floor(s_yaw / 0x1000) * 0x1000;
+        s_yaw -= turns;
+        s_targetYaw -= turns;
+    }
+
+    target.x = (s32)floor(s_pitch + 0.5) & 0xfff;
+    target.y = (s32)floor(s_yaw + 0.5) & 0xfff;
+    target.z = 0;
+
+    distance = g_camReqDist ? g_camReqDist : params->dist;
+    focal = g_camReqFocal ? g_camReqFocal : params->focal;
+    speeds = *(Vec3i *)&params->pitchSpeed;
+    angles = target;
+    g_camTrajectory = 0;
+    g_camTrajSegment = 0;
+    /* the distance, focal and aim eased as the follow camera does; the angles are the orbit's own */
+    Camera_SmoothToDesired(camera, &angles, &speeds.x, &distance, focal, &g_camReqAimOffset, 0);
+    angles = target;
+    g_camPitchVel = g_camYawVel = g_camRollVel = 0;
+    Camera_SolveCollision(camera, &angles, distance, 0, 32000);
+    g_camLedgeLookState = LEDGE_NONE;
+    s_lastYaw = camera->rot.y;
+    s_lastPitch = camera->rot.x;
+}
+
+/* the follow camera as the game made it (the levels' zones and rails, collision; only g_camFreeYaw changes it) */
+static void Camera_UpdateFollowDesigned(Camera *camera, Pad *pad)
 {
     struct Work {
         s32 velocityZ, velocityX;
@@ -2085,6 +2213,7 @@ void Camera_UpdateFollow(Camera *camera, Pad *pad)
         Vec3i speeds;
         u16 unused04;
         s16 angleDelta;
+        s32 freeYaw;
     } w;
     w.params = &g_camModeParams[g_camMode];
     w.restriction = g_camRestriction;
@@ -2100,9 +2229,10 @@ void Camera_UpdateFollow(Camera *camera, Pad *pad)
                          (g_camMode == CAM_ROBOT && w.restriction->flags.modeRobot) ||
                          (g_camMode == CAM_FOLLOW_RUN && w.restriction->flags.modeRun));
     w.trajectory = w.restrictEnabled && w.restriction->trajectory;
-    w.forbidPad = (w.restrictEnabled && w.restriction->flags.forbidPad) || w.trajectory;
-    w.mirror = w.restrictEnabled && w.restriction->flags.mirrorYaw;
-    w.snap = g_camReqFlags.snapYaw || (w.restrictEnabled && w.restriction->flags.snapYaw);
+    w.freeYaw = g_camFreeYaw && !w.trajectory; /* the zone does not turn the camera */
+    w.forbidPad = (w.restrictEnabled && w.restriction->flags.forbidPad && !w.freeYaw) || w.trajectory;
+    w.mirror = w.restrictEnabled && w.restriction->flags.mirrorYaw && !w.freeYaw;
+    w.snap = g_camReqFlags.snapYaw || (w.restrictEnabled && w.restriction->flags.snapYaw && !w.freeYaw);
     w.smooth = g_camFlags.smooth;
     w.side = 0;
     if (!w.forbidPad) {
@@ -2222,7 +2352,7 @@ void Camera_UpdateFollow(Camera *camera, Pad *pad)
         w.speeds.y = w.speeds.y * g_camReqSpeedFactor >> 12;
     }
     if (w.restrictEnabled) {
-        Camera_ApplyRestriction(&w.angles, &w.speeds.x, &w.distance, &w.focal, w.restriction);
+        Camera_ApplyRestriction(&w.angles, &w.speeds.x, &w.distance, &w.focal, w.restriction, w.freeYaw);
         w.aim.x += w.restriction->aimOffset.x;
         w.aim.y += w.restriction->aimOffset.y;
         w.aim.z += w.restriction->aimOffset.z;
@@ -2255,6 +2385,42 @@ void Camera_UpdateFollow(Camera *camera, Pad *pad)
         Camera_UpdateLedgeLook(camera);
     else
         g_camLedgeLookState = LEDGE_NONE;
+}
+
+/* whether the camera zone in force is a top-down one (its pitch range straight down, as Camera_SolveCollision marks
+ * "overhead"): a section designed around that view, as the maze of Lvl-14, which the orbit camera leaves to it */
+static s32 Camera_InOverheadZone()
+{
+    const CamRestrict *r = g_camRestriction;
+    if (!r)
+        return 0;
+    if (!(((g_camMode == CAM_FOLLOW || g_camMode == CAM_SAM_CHASE) && r->flags.modeFollow) ||
+          (g_camMode == CAM_ROBOT && r->flags.modeRobot) || (g_camMode == CAM_FOLLOW_RUN && r->flags.modeRun)))
+        return 0;
+    return r->pitchMin >= 0x380 && r->pitchMax <= 0x480;
+}
+
+/* the follow modes: the orbit camera (g_camOrbit), except in a top-down zone, where the camera is the designed one in
+ * full (g_camFreeYaw off for it: the zone sets the view) and the mouse's motion there is dropped, so the orbit does not
+ * jump when it takes over again, from wherever the zone left the camera */
+void Camera_UpdateFollow(Camera *camera, Pad *pad)
+{
+    float unusedX, unusedY;
+    u8 freeYaw;
+    s_camOrbitDeferred = g_camOrbit && Camera_InOverheadZone();
+    if (g_camOrbit && !s_camOrbitDeferred) {
+        Camera_UpdateOrbit(camera, pad);
+        return;
+    }
+    if (s_camOrbitDeferred) {
+        Platform_TakeMouseLook(&unusedX, &unusedY);
+        freeYaw = g_camFreeYaw;
+        g_camFreeYaw = 0;
+        Camera_UpdateFollowDesigned(camera, pad);
+        g_camFreeYaw = freeYaw;
+        return;
+    }
+    Camera_UpdateFollowDesigned(camera, pad);
 }
 void Camera_UpdateRocket(Camera *camera, Pad *)
 {
@@ -2479,7 +2645,7 @@ void Camera_UpdateDirected(Camera *camera, Pad *pad)
         w.focal = w.params->focal;
     w.speeds = *(Vec3i *)&w.params->pitchSpeed;
     if (w.restriction && g_camReqFlags.restriction) {
-        Camera_ApplyRestriction(&w.angles, &w.speeds.x, &w.distance, &w.focal, w.restriction);
+        Camera_ApplyRestriction(&w.angles, &w.speeds.x, &w.distance, &w.focal, w.restriction, 0);
         if (w.restriction->trajectory)
             Camera_FollowTrajectory(w.restriction->trajectory, &w.angles, &w.distance, &w.speeds.x, 0);
         else {
@@ -2861,7 +3027,8 @@ void Camera_InitSettings()
         g_camSettingsInit = 1;
         Camera_LoadControlSettings();
         g_camMinPitch = 0xa0;
-        g_camSettings = 0x2e;
+        g_camSettings = 0x0e;
+        //g_camSettings = 0x2e;
         g_camAutoYawGain = 0x1000;
         g_camEyeBoxMin.x = -50;
         g_camEyeBoxMin.y = -50;

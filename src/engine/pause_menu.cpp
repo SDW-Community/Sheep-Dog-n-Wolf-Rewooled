@@ -167,6 +167,7 @@ void PauseMenu_ItemControlDevice(u8 msg, MenuPage *item);
 void PauseMenu_ItemCameraSpeed(u8 msg, MenuPage *item);
 void PauseMenu_ItemCameraAcceleration(u8 msg, MenuPage *item);
 void PauseMenu_ItemInvertCameraJoystick(u8 msg, MenuPage *item);
+void PauseMenu_ItemLegacyControls(u8 msg, MenuPage *item);
 void PauseMenu_ItemBindUp(u8 msg, MenuPage *item);
 void PauseMenu_ItemBindRight(u8 msg, MenuPage *item);
 void PauseMenu_ItemBindDown(u8 msg, MenuPage *item);
@@ -209,6 +210,8 @@ void PausedMenu_ItemPaused(u8 msg, MenuPage *item);
 #define SDW_INLINE_FREE_GAME_CLEARFLAGS_U32 1
 #include "game_state_inlines.h"
 #include "../platform/platform.h"
+#include "input/input_actions.h"
+
 #undef SDW_INLINE_FREE_GAME_CLEARFLAGS_U32
 
 /* The constants reach the code unfolded. */
@@ -312,6 +315,7 @@ void PauseMenu_ReturnToRoot()
  * 0x4001), makes the pause menu current at its root. */
 void PauseMenu_Open()
 {
+    Input_PushContext(ICTX_MENU);
     g_pProgress->CopyRecord(g_progressPauseCopy);
     Sound_PauseAll();
     g_pad.SetActuator(0);
@@ -341,7 +345,7 @@ void PauseMenu_Exit()
 {
     HKEY key;
     DWORD len;
-
+    Input_PopContext(ICTX_MENU);
     Menu_Close();
     g_meshOutlinesEnabled = g_pauseMeshOutlines;
     // Keep the existing music stream unless the sound mode disables it or it needs starting.
@@ -712,6 +716,8 @@ void PauseMenu_Build()
     Menu_AddItems(dispPage, PauseMenu_ItemFog, PauseMenu_ItemDisplayDone, MENU_END);
     Menu_AddItems(padPage, PauseMenu_ItemControlDevice, MENU_END);
     bindPage = Menu_AddPage(padPage, (void *)PauseMenu_PageEditConfig, 1);
+    Menu_AddItems(padPage, PauseMenu_ItemCameraSpeed, PauseMenu_ItemCameraAcceleration,
+                  PauseMenu_ItemInvertCameraJoystick, PauseMenu_ItemLegacyControls, MENU_END);
     Menu_AddItems(rewooledPage, PauseMenu_ItemCameraSpeed, PauseMenu_ItemCameraAcceleration,
                   PauseMenu_ItemInvertCameraJoystick, PauseMenu_ItemMeshOutlines,
                   PauseMenu_ItemRewooledDone, MENU_END);
@@ -782,6 +788,8 @@ void PauseMenu_PageEditConfig(u8 msg, MenuPage *item)
             device = g_inputMgr.GetCurrentDeviceIdx();
             g_inputMgr.LoadConfig(g_dirReference);
             g_inputMgr.SelectDevice(device);
+            Input_ResetBindings(ICTX_GAMEPLAY); /* Ralph's keys as last saved: unsaved changes dropped */
+            Input_LoadBindings(ICTX_GAMEPLAY);
             break;
     }
 }
@@ -1074,6 +1082,26 @@ void PauseMenu_ItemInvertCameraJoystick(u8 msg, MenuPage *item)
     }
 }
 
+/* "Legacy Controls": the original camera and keyboard layout (Input_SetLegacyControls). Switching wipes the saved key
+ * bindings, which the message says. */
+void PauseMenu_ItemLegacyControls(u8 msg, MenuPage *item)
+{
+    switch (msg) {
+        case MENU_MSG_DRAW_SELECTED:
+            Menu_BuildNavFooter();
+            break;
+        case MENU_MSG_DRAW:
+            Menu_Printf(item, TEXTALIGN_LEFT, "Legacy Controls");
+            Menu_Printf(item, TEXTALIGN_RIGHT, g_onOffNames[g_legacyControls]);
+            break;
+        case MENU_MSG_VALUE_CHANGED:
+            Input_SetLegacyControls(!g_legacyControls);
+            Ui_PlayMoveSound();
+            Menu_ShowMessageBox("Key bindings reset to defaults", TEXTALIGN_CENTER, 2000);
+            break;
+    }
+}
+
 inline u8 Input_CurrentDevice()
 {
     return g_inputMgr.GetCurrentDeviceIdx();
@@ -1200,6 +1228,7 @@ void PauseMenu_ItemSaveConfig(u8 msg, MenuPage *item)
             break;
         case MENU_MSG_CONFIRM:
             g_inputMgr.SaveConfig(0);
+            Input_SaveBindings(ICTX_GAMEPLAY);
             Menu_ShowMessageBox(g_textCatalog.LoadString(8, g_uiLangMask, 0x400), TEXTALIGN_CENTER, 2000);
             Menu_GoBack();
             g_pauseSlidersShown = 1;
@@ -1239,6 +1268,68 @@ int Menu_IsKeyNameDisplayable(const char *keyName)
 
 /* "press a key": binds the first control pressed to actionId, swapping it with the action that had it.
  * Slots 12..15 (the menu arrows) take keyboard keys only. */
+/* the controls page's rows in the gameplay input context (src/engine/input/input_actions.h): its action, or -1 and
+ * *direction the movement key (0 up, 1 right, 2 down, 3 left); -1 and -1 for a row with no counterpart there */
+static s32 Menu_GameplayAction(u8 slot, s32 *direction)
+{
+    *direction = -1;
+    switch (slot) {
+        case INPUT_BIND_MENU_UP:
+            *direction = 0;
+            return -1;
+        case INPUT_BIND_MENU_RIGHT:
+            *direction = 1;
+            return -1;
+        case INPUT_BIND_MENU_DOWN:
+            *direction = 2;
+            return -1;
+        case INPUT_BIND_MENU_LEFT:
+            *direction = 3;
+            return -1;
+        case INPUT_BIND_CROSS:
+            return GA_ACTION;
+        case INPUT_BIND_SQUARE:
+            return GA_JUMP;
+        case INPUT_BIND_TRIANGLE:
+            return GA_LOOK;
+        case INPUT_BIND_CIRCLE:
+            return GA_RUN;
+        case INPUT_BIND_L1:
+            return GA_ITEMWHEEL;
+        case INPUT_BIND_R1:
+            return GA_SNEAK;
+        case INPUT_BIND_SELECT:
+            return GA_MAP;
+        case INPUT_BIND_L2:
+            return GA_CAM_LEFT;
+        case INPUT_BIND_R2:
+            return GA_CAM_RIGHT;
+    }
+    return -1;
+}
+
+/* a key or mouse button for a gameplay row: 1 when it was taken. The controller is not rebound (its buttons are by
+ * position); a mouse button cannot be a movement key */
+static u8 Menu_RebindGameplay(s32 action, s32 direction, const InputBindingIdx *key)
+{
+    InputBindingRef b = {SRC_NONE, 0, INPUT_FAMILY_ANY};
+    if (key->devIdx == INPUTDEV_MASK_KEYBOARD)
+        b.source = SRC_KEY;
+    else if (key->devIdx == INPUTDEV_MASK_MOUSE)
+        b.source = SRC_MOUSE;
+    else
+        return 0;
+    b.code = key->code;
+    if (direction >= 0) {
+        if (b.source != SRC_KEY)
+            return 0;
+        Input_RebindMoveKey(ICTX_GAMEPLAY, (u8)direction, b.code);
+    } else {
+        Input_RebindKey(ICTX_GAMEPLAY, (u8)action, b);
+    }
+    return 1;
+}
+
 void Menu_RebindControl(u8 actionId)
 {
     long result;
@@ -1262,7 +1353,11 @@ void Menu_RebindControl(u8 actionId)
                 usable = 1;
                 if (newKey.devIdx != INPUTDEV_MASK_JOYSTICK)
                     usable = Menu_IsKeyNameDisplayable(keyText);
-                if (usable) {
+                s32 gameplayAction, gameplayDirection;
+                gameplayAction = Menu_GameplayAction(actionId, &gameplayDirection);
+                if (usable && (gameplayAction >= 0 || gameplayDirection >= 0)) {
+                    changed = Menu_RebindGameplay(gameplayAction, gameplayDirection, &newKey); /* Ralph's keys */
+                } else if (usable) {
                     clash = g_inputMgr.FindBindingByIndex(&newKey);
                     if (clash < 0x10) {
                         g_inputMgr.GetBinding(actionId, &oldBind);
@@ -1448,7 +1543,28 @@ void Menu_DrawBindingText(u8 actionId, MenuPage *item)
     char text[64];
     InputBindingIdx b;
 
-    g_inputMgr.GetBinding(actionId, &b);
+    InputBindingRef gameplayKey;
+    s32 gameplayAction, gameplayDirection;
+    gameplayAction = Menu_GameplayAction(actionId, &gameplayDirection);
+    if (gameplayDirection >= 0) { /* Ralph's keys: the gameplay input context */
+        b.devIdx = INPUTDEV_MASK_KEYBOARD;
+        b.code = Input_MoveKey(ICTX_GAMEPLAY, (u8)gameplayDirection);
+    } else if (gameplayAction >= 0) {
+        b.devIdx = INPUTDEV_MASK_KEYBOARD;
+        b.code = 0;
+        if (Input_KeyBinding(ICTX_GAMEPLAY, (u8)gameplayAction, &gameplayKey)) {
+            b.devIdx = gameplayKey.source == SRC_MOUSE ? INPUTDEV_MASK_MOUSE : INPUTDEV_MASK_KEYBOARD;
+            b.code = gameplayKey.code;
+        }
+    } else {
+        g_inputMgr.GetBinding(actionId, &b);
+    }
+    if (b.devIdx == INPUTDEV_MASK_KEYBOARD && !b.code) { /* unbound */
+        Text_SetColor(0xff5050);
+        Menu_Printf(item, TEXTALIGN_RIGHT, "---");
+        Text_SetColor(0x4bccff);
+        return;
+    }
     switch (b.devIdx) {
         case INPUTDEV_MASK_MOUSE:
             sprintf(text, "(MOUSE)%d", b.code);

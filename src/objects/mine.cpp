@@ -304,6 +304,12 @@ struct GroundMineMoveArg {
 #undef SDW_INLINE_ZONELIST_CONTAINS_VEC3S
 #define SDW_INLINE_FREE_SOUNDISPLAYING_U16 1
 #include "../engine/sound_mgr_inlines.h"
+#include "../engine/input/input_actions.h"
+#include "../engine/hud/hud_prompt.h"
+static const u8 s_defuseActions[4] = {DA_TOP, DA_RIGHT, DA_LEFT, DA_BOTTOM};
+/* the mine whose defusal owns the input (ICTX_DEFUSE): pushed and popped in DefusableMine::SetState, only by it */
+static DefusableMine *s_defuseOwner;
+
 #undef SDW_INLINE_FREE_SOUNDISPLAYING_U16
 inline void FacingDirection(Vec3s *direction, s16 angle)
 {
@@ -691,9 +697,6 @@ EmitterFadeParams g_defusableMineRingFxParams = {7168, 6144, 12288, 50, 320, 5};
 extern u32 *g_screenLayerBase;
 extern u32 g_gameTime;
 
-#define g_padCurButtons (g_pad.cur.buttons)
-
-#define g_padPrevButtons (g_pad.prev.buttons)
 
 extern Wolf *g_pWolf;
 u16 Sound_Play(u16 id, void *owner, u16 volume, u8 flags, s32 rate);
@@ -724,9 +727,12 @@ void DefusableMine::DrawPanel()
     g_defuseGlyphSprite.DrawAt(g_screenLayerBase + 8, p - 11 - (g_defuseGlyphSprite.widthMinus1 >> 1),
                                r - 44 - (g_defuseGlyphSprite.widthMinus1 >> 1), 0x1e5c17, 0);
     for (q = 0; q < 4; q++) {
-        g_defusePadSprites[q].DrawAt(g_screenLayerBase + 8,
+        /*g_defusePadSprites[q].DrawAt(g_screenLayerBase + 8,
                                      p + g_defuseButtonTable[q].x - (g_defusePadSprites[q].widthMinus1 >> 1),
-                                     r + g_defuseButtonTable[q].y - (g_defusePadSprites[q].height >> 1), 0x808080, 0);
+                                     r + g_defuseButtonTable[q].y - (g_defusePadSprites[q].height >> 1), 0x808080, 0);*/
+        /* the new prompts on top (src/engine/hud/hud_prompt.h): the key bound to this symbol, at its centre */
+        HudPrompt_DrawAction(ICTX_DEFUSE, s_defuseActions[q], p + g_defuseButtonTable[q].x, r + g_defuseButtonTable[q].y,
+                             g_screenLayerBase + 6);
     }
     g_defusePanelSprite.DrawThunkAt(g_screenLayerBase + 9, 16, 32, 0x808080, 0);
     g_defusePanelSprite.DrawThunkAt(g_screenLayerBase + 9, p, 32, 0x808080, 4);
@@ -800,7 +806,7 @@ void DefusableMine::Update()
             }
             break;
         case DM_ST_DEFUSE_BEGIN:
-            SetState(DM_ST_PLAYBACK);
+            SetState(DM_ST_PLAYBACK); /* pushes ICTX_DEFUSE (SetState) */
             break;
         case DM_ST_PLAYBACK:
             if (g_gameTime % 0x400 > 0x200)
@@ -838,8 +844,10 @@ void DefusableMine::Update()
             t = (code >> (seqIndex << 1)) & 3;
             q = stepStart + 0x1000;
             for (s = 0; s < 4; s++) {
-                if (!(g_padCurButtons & ~g_defuseButtonTable[s].mask) &&
-                    (g_padPrevButtons & ~g_defuseButtonTable[s].mask)) {
+                if (Input_Pressed(ICTX_DEFUSE, s_defuseActions[s])) {
+
+                    /*if (!(g_padCurButtons & ~g_defuseButtonTable[s].mask) &&
+                    (g_padPrevButtons & ~g_defuseButtonTable[s].mask)) { */
                     if (g_gameTime >= q - 0x400 && g_gameTime <= q + 0x400 && s == t &&
                         !(dmFlags.failed | dmFlags.hit)) {
                         dmFlags.hit = 1;
@@ -993,11 +1001,21 @@ void DefusableMine::SetState(u8 newState)
             break;
     }
     if (p) {
+        if (!s_defuseOwner) { /* entering the defusal: it owns the input until it leaves */
+            Input_PushContext(ICTX_DEFUSE);
+            s_defuseOwner = this;
+        }
         if (!dmFlags.wolfFrozen && g_pWolf->HandleMessage(this, MSG_FREEZE, 0))
             dmFlags.wolfFrozen = 1;
-    } else if (dmFlags.wolfFrozen) {
-        g_pWolf->HandleMessage(this, MSG_UNFREEZE, 0);
-        dmFlags.wolfFrozen = 0;
+    } else {
+        if (s_defuseOwner == this) { /* leaving it, whichever way: defused, exploded, interrupted, reset */
+            Input_PopContext(ICTX_DEFUSE);
+            s_defuseOwner = 0;
+        }
+        if (dmFlags.wolfFrozen) {
+            g_pWolf->HandleMessage(this, MSG_UNFREEZE, 0);
+            dmFlags.wolfFrozen = 0;
+        }
     }
     Mine::SetState(newState);
 }
@@ -1028,6 +1046,7 @@ void DefusableMine::Reset()
 void DefusableMine::PostLoadInit()
 {
     void *p = record;
+    s_defuseOwner = 0; /* a level left mid-defusal: Input_ResetContexts already emptied the stack */
     finalSound = 0;
     dormant = 1;
     phaseOffset = (PropS32(p, 4) << 12) / 100;

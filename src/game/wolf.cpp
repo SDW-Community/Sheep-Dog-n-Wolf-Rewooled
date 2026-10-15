@@ -85,6 +85,10 @@
 #include "../engine/scenaric.h"
 #include "../engine/progress.h"
 #include "../engine/input.h"
+
+/* the run was stopped by the keyboard's opposite movement key (Input_TakeRunCancel): WOLF_ST_RUN_STOP brakes straight
+ * on instead of steering toward the stick; cleared when the stop is over */
+static u8 s_runCancelBrake;
 s32 Vec3s_DistSqXZ(Vec3s *a, Vec3s *b); /* dx*dx + dz*dz */
 class Instance;
 struct Animator;
@@ -197,6 +201,9 @@ s32 Scenaric_FindByClass(u16 classId, ScnObject **out, s32 max);
 /* INST_F_TINT, the tint override. */
 #define SDW_INLINE_SCNOBJECT_SETTINTED_S32 1
 #include "../engine/scenaric_inlines.h"
+#include "../engine/input/input_actions.h"
+
+
 #undef SDW_INLINE_SCNOBJECT_SETTINTED_S32
 
 extern const u16 g_wolfAltModelIds[] = {WAR_IDO_AEXPLOS2, WAR_IDO_ABCOYO01, WAR_IDO_AMCOYO01, WAR_IDO_ACOLAP01,
@@ -1106,6 +1113,11 @@ void Wolf::StateMachine(Pad *pad)
                 SetState(WOLF_ST_FALL);
             break;
         case WOLF_ST_RUN_START:
+            if (Input_Pressed(ICTX_GAMEPLAY, GA_STOP_RUN)) { /* the opposite movement key on the keyboard: stop, do not turn at a run */
+                SetState(WOLF_ST_RUN_STOP);
+                s_runCancelBrake = 1;
+                break;
+            }
             RunTapCheck(1);
             if (RunStep(pad) && AnimFlags(ANIM_F_FINISHED)) {
                 if (flags & WOLF_FB_RUN)
@@ -1115,12 +1127,28 @@ void Wolf::StateMachine(Pad *pad)
             }
             break;
         case WOLF_ST_RUN:
+            if (Input_Pressed(ICTX_GAMEPLAY, GA_STOP_RUN)) {
+                SetState(WOLF_ST_RUN_STOP);
+                s_runCancelBrake = 1;
+                break;
+            }
             RunTapCheck(0);
             if (RunStep(pad) && !(flags & WOLF_FB_RUN) && speed < w.bank->profiles[surface]->maxSpeed)
                 SetState(WOLF_ST_RUN_STOP);
             break;
         case WOLF_ST_RUN_STOP:
             ClearFlags(WOLF_FB_RUN);
+            if (s_runCancelBrake) {
+                /* stopped by the opposite key: braking straight on, the stick (pointing back) not steering the slide */
+                s32 heldMag = stickMag;
+                stickMag = 0;
+                if (RunStep(pad) && AnimFlags(ANIM_F_FINISHED))
+                    SetState(WOLF_ST_RUN_RECOVER);
+                stickMag = heldMag;
+                if (state != WOLF_ST_RUN_STOP)
+                    s_runCancelBrake = 0;
+                break;
+            }
             if (RunStep(pad) && AnimFlags(ANIM_F_FINISHED))
                 SetState(WOLF_ST_RUN_RECOVER);
             break;
@@ -1133,6 +1161,10 @@ void Wolf::StateMachine(Pad *pad)
             }
             break;
         case WOLF_ST_RUN_AIR:
+            if (Input_Pressed(ICTX_GAMEPLAY, GA_STOP_RUN)) { /* in the air: no stopping, but no running on after the landing */
+                ClearFlags(WOLF_FB_RUN);
+                runTapTimer = 0;
+            }
             RunTapCheck(0);
             if (stateTime > w.bank->params[8]) {
                 ClearFlags(WOLF_FB_RUN);
@@ -2712,6 +2744,7 @@ void Wolf::Update()
     if (!grabber || !grabber->HandleMessage(this, MSG_DRAW_PROMPT, 0)) {
         inControl = (!(flags & WOLF_FB_FROZEN) || (flags & WOLF_FB_FROZEN_BUT_PROMPT)) &&
                     !(flags & (WOLF_FB_DEAD | WOLF_FB_WON));
+
         DrawActionPrompt(&ctxAction, heldActionType, ctx4PromptIndex, &coverAction,
                          inControl && !(g_gameFlags & GF_ITEM_WHEEL_OPEN) && !(flags & WOLF_FB_PROMPT_DISABLED));
         Hud_DrawItemPrompt(&itemPromptClassId, inControl && itemPromptClassId);
