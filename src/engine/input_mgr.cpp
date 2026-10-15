@@ -63,6 +63,7 @@ u8 Reg_WriteBinary(HKEY key, const char *name, const void *data, DWORD size);
 #include "draw2d.h"
 #include "../objects/camera.h"
 #include "../platform/save_store.h"
+#include "input/input_actions.h"
 #include "input.h"
 extern s32 g_dtRawMs;
 
@@ -473,6 +474,7 @@ void Input_SetLegacyControls(u8 on)
         Save_CloseKey(key);
     }
     Save_DeleteKey("Config");
+    Input_ForgetBindings(ICTX_GAMEPLAY); /* the player's keys too: the new controls' or the legacy ones' defaults */
     device = g_inputMgr.GetCurrentDeviceIdx();
     g_inputMgr.LoadConfig(g_dirReference);
     g_inputMgr.SelectDevice(device);
@@ -606,9 +608,9 @@ long InputMgr::Poll()
             if (InputMgr_SlotHeld(&keyTable[slot]) || (s_padConnected && InputMgr_SlotHeld(&padTable[slot])))
                 padBits &= (u16)~s_slotPadBit[slot];
         }
-        /* a movement key held after its taps: the run action's button tapped, wherever the controls put it */
+        /* a movement key held after its taps: the run action's button tapped, wherever the controls put it
         if (!g_legacyControls && InputMgr_TapRun(this))
-            padBits &= g_inputMap[4 + INPUT_RUN_ACTION];
+            padBits &= g_inputMap[4 + INPUT_RUN_ACTION]; */
         nav = PAD_ALL_RELEASED;
         escPressed = !escPrev && escDown ? 1 : 0;
         enterPressed = !enterPrev && keyboard->buttonPressed[DIK_RETURN] ? 1 : 0;

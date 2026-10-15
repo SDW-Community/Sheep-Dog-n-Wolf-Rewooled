@@ -130,7 +130,19 @@ u8 Input_Repeat(u8 ctx, u8 action);   /* the press, then repeats while held (con
  * for prompts and a controls page; 1 when there is one */
 u8 Input_FindBinding(u8 ctx, u8 action, u8 wantPad, InputBindingRef *out);
 void Input_Rebind(u8 ctx, u8 action, u8 slot, InputBindingRef b);
-void Input_ResetBindings(u8 ctx); /* back to the context's defaults */
+void Input_ResetBindings(u8 ctx); /* back to the context's defaults (the legacy ones with Legacy Controls on) */
+
+/* the player's keys (the pause menu's controls page): one keyboard / mouse binding per action, four movement keys;
+ * a key already in use moves to the old key of the one rebound (a swap) */
+u8 Input_KeyBinding(u8 ctx, u8 action, InputBindingRef *out); /* the action's keyboard / mouse binding */
+u16 Input_MoveKey(u8 ctx, u8 direction);                       /* DIK_* of direction 0 up, 1 right, 2 down, 3 left */
+void Input_RebindKey(u8 ctx, u8 action, InputBindingRef key);  /* key: SRC_KEY or SRC_MOUSE */
+void Input_RebindMoveKey(u8 ctx, u8 direction, u16 dik);
+/* the bindings saved in the save files (CfgGame), for the contexts that are saved (gameplay); loaded at start-up.
+ * Forget: the save cleared and the defaults back */
+u8 Input_SaveBindings(u8 ctx);
+u8 Input_LoadBindings(u8 ctx);
+void Input_ForgetBindings(u8 ctx);
 
 /* a context's name and its actions' names (controls page, overlay) */
 const char *Input_ContextName(u8 ctx);

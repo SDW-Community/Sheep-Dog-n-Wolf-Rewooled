@@ -36,6 +36,12 @@ from the sketch below:
   `GA_STOP_RUN` when the opposite movement key is pressed during a run. It reads the Move axis's keys, and is off with
   Legacy Controls. `InputMgr_TapRun` / `Input_TakeRunCancel` still feed `g_pad` until `ReadPad` reads the actions;
   remove them in that change;
+- **Ralph's keys are the player's:** gameplay copies nothing from the old tables any more. The pause menu's controls
+  page ("Edit config.") shows and rebinds the gameplay context (`Input_RebindKey`, `Input_RebindMoveKey`: one
+  keyboard / mouse key per action, four movement keys, a key in use swaps with the old one; the controller is not
+  rebound). "Save config" saves them in `CfgGame\InputGameplay` (`Input_SaveBindings`), loaded at start-up; entering the
+  page reloads the saved set. **Legacy Controls** picks `s_gameplayLegacyDefaults` (the disc's layout, arrows to move)
+  and, as before, toggling it resets the player's keys;
 - `DA_ABORT` is not there yet.
 
 ## The problem today

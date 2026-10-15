@@ -47,5 +47,5 @@ extern Pad g_pad2;
 extern u8 g_rumbleSeqFallingRock[];
 extern u8 g_rumbleSeqImpact[];      /* rumble motor pattern of the run crash */
 extern u8 g_rumbleSeqKill[];        /* {0xc8,0x40,0x80,0x20,0xff}: the rumble of a fatal fall / zap */
-
+u8 Input_GetMode();
 #endif

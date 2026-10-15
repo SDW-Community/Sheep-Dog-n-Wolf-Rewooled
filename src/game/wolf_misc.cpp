@@ -19,6 +19,7 @@ struct Animator;
 #include "../engine/progress_inventory.h"
 #include "../platform/platform.h"
 #include "wolf_api.h"
+#include "../engine/input/input_actions.h"
 
 extern EmitterDriftParams g_wolfDustParams, g_wolfTurnDustParams, g_wolfRocketFxParams, g_wolfLandDustParams,
     g_wolfSkidDustParams, g_wolfBreathParams;
@@ -816,7 +817,9 @@ s32 Wolf::QuickInventory(Pad *pad)
     s32 result; /* the names order the frame: result -4, allowed -8, desc -0xc, wheelOpen -0x10 */
     s32 scroll = -Platform_TakeMouseScroll(); /* taken every frame, so no old notch opens the wheel later */
     s32 stowClick = Platform_TakeMouseRightClicks() && !Input_IsMouseButtonBound(INVWHEEL_STOW_MOUSE_BUTTON);
-    u8 buttonHeld = !(pad->cur.buttons & ~g_padMasks[6]);
+    u8 buttonHeld = Input_Held(ICTX_GAMEPLAY, GA_ITEMWHEEL);
+    s32 wheelX, wheelY;
+    Input_Axis2D(ICTX_GAMEPLAY, GX_MOVE, &wheelX, &wheelY); /* turning the wheel: Move left / right */
     result = 0;
     switch (mode) {
         case WOLF_MODE_NORMAL:
@@ -836,9 +839,9 @@ s32 Wolf::QuickInventory(Pad *pad)
                         s_wheelScrollCloseMs = INVWHEEL_SCROLL_CLOSE_MS;
                     }
                     if (!InvWheel_IsRotating()) {
-                        if (Pad_MenuHeld((u16)~PAD_LEFT))
+                        if (wheelX < -128)
                             Inventory_SelectPrev();
-                        else if (Pad_MenuHeld((u16)~PAD_RIGHT))
+                        else if (wheelX > 128)
                             Inventory_SelectNext();
                         else if (s_wheelScrollQueue > 0) {
                             s_wheelScrollQueue--;
@@ -998,7 +1001,7 @@ void Wolf::UpdateCamera(Pad *pad)
                     else
                         g_camReqRot.x = rot.x;
                 }
-                if (!(pad->cur.buttons & ~g_padMasks[8]) && (pad->prev.buttons & ~g_padMasks[8]) && allowLook)
+                if (Input_Pressed(ICTX_GAMEPLAY, GA_LOOK) && allowLook)
                     Camera_SetMode(CAM_LOOK, 1);
                 break;
             case CAM_LOOK:
@@ -1007,7 +1010,7 @@ void Wolf::UpdateCamera(Pad *pad)
                     SetFacing(moveDir);
                 }
                 g_camReqAimOffset.y -= 0x1e;
-                if ((pad->cur.buttons & ~g_padMasks[8]) || !allowLook)
+                if (!Input_Held(ICTX_GAMEPLAY, GA_LOOK) || !allowLook)
                     Camera_SetMode(newMode, 1);
                 break;
             case CAM_FOLLOW_RUN:

@@ -201,6 +201,9 @@ s32 Scenaric_FindByClass(u16 classId, ScnObject **out, s32 max);
 /* INST_F_TINT, the tint override. */
 #define SDW_INLINE_SCNOBJECT_SETTINTED_S32 1
 #include "../engine/scenaric_inlines.h"
+#include "../engine/input/input_actions.h"
+
+
 #undef SDW_INLINE_SCNOBJECT_SETTINTED_S32
 
 extern const u16 g_wolfAltModelIds[] = {WAR_IDO_AEXPLOS2, WAR_IDO_ABCOYO01, WAR_IDO_AMCOYO01, WAR_IDO_ACOLAP01,
@@ -1110,7 +1113,7 @@ void Wolf::StateMachine(Pad *pad)
                 SetState(WOLF_ST_FALL);
             break;
         case WOLF_ST_RUN_START:
-            if (Input_TakeRunCancel()) { /* the opposite movement key on the keyboard: stop, do not turn at a run */
+            if (Input_Pressed(ICTX_GAMEPLAY, GA_STOP_RUN)) { /* the opposite movement key on the keyboard: stop, do not turn at a run */
                 SetState(WOLF_ST_RUN_STOP);
                 s_runCancelBrake = 1;
                 break;
@@ -1124,7 +1127,7 @@ void Wolf::StateMachine(Pad *pad)
             }
             break;
         case WOLF_ST_RUN:
-            if (Input_TakeRunCancel()) {
+            if (Input_Pressed(ICTX_GAMEPLAY, GA_STOP_RUN)) {
                 SetState(WOLF_ST_RUN_STOP);
                 s_runCancelBrake = 1;
                 break;
@@ -1158,7 +1161,7 @@ void Wolf::StateMachine(Pad *pad)
             }
             break;
         case WOLF_ST_RUN_AIR:
-            if (Input_TakeRunCancel()) { /* in the air: no stopping, but no running on after the landing */
+            if (Input_Pressed(ICTX_GAMEPLAY, GA_STOP_RUN)) { /* in the air: no stopping, but no running on after the landing */
                 ClearFlags(WOLF_FB_RUN);
                 runTapTimer = 0;
             }
@@ -2741,6 +2744,7 @@ void Wolf::Update()
     if (!grabber || !grabber->HandleMessage(this, MSG_DRAW_PROMPT, 0)) {
         inControl = (!(flags & WOLF_FB_FROZEN) || (flags & WOLF_FB_FROZEN_BUT_PROMPT)) &&
                     !(flags & (WOLF_FB_DEAD | WOLF_FB_WON));
+
         DrawActionPrompt(&ctxAction, heldActionType, ctx4PromptIndex, &coverAction,
                          inControl && !(g_gameFlags & GF_ITEM_WHEEL_OPEN) && !(flags & WOLF_FB_PROMPT_DISABLED));
         Hud_DrawItemPrompt(&itemPromptClassId, inControl && itemPromptClassId);

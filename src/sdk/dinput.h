@@ -37,6 +37,7 @@
 #define DIK_UP 0xC8     /* UpArrow on arrow keypad */
 #define DIK_W 0x11
 #define DIK_X 0x2D
+#define DIK_Z 0x2C
 #define DIPH_BYID 2
 #define DIPH_BYOFFSET 1
 #define DIPROP_KEYNAME MAKEDIPROP(20)

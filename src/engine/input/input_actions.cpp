@@ -24,6 +24,7 @@
 #include "../input.h"
 #include "input_actions.h"
 #include "../../platform/platform.h"
+#include "../../platform/save_store.h"
 
 extern u16 g_inputMap[16]; /* the actions' PS1 masks (input.cpp): g_inputMap[4 + n] is g_padMasks[n] */
 extern s32 g_dtRawMs;
@@ -65,6 +66,11 @@ struct InputContextDef {
      * clear action bits in *down, actions no single binding can express. Called every frame, also when the context is
      * not on top (*down is 0 then): a chance to forget its state. 0 for most contexts */
     void (*postProcess)(u8 ctx, u32 *down);
+    /* the defaults with Legacy Controls on (the disc's layout); 0: the same as `defaults` */
+    const InputBindingRef (*legacyDefaults)[INPUT_MAX_BINDINGS];
+    const InputAxisBindingRef (*legacyAxisDefaults)[INPUT_MAX_AXIS_BINDINGS];
+    /* the CfgGame value its bindings are saved in (Input_SaveBindings); 0: not saved */
+    const char *saveName;
 };
 
 #define AXIS_KEYS(u, r, d, l) {AXSRC_KEYS, {u, r, d, l}}
@@ -77,18 +83,36 @@ static const char *const s_gameplayNames[GA_COUNT] = {"JUMP",  "RUN",   "ACTION"
                                                       "CAM-L", "CAM-R", "MAP",    "PAUSE", "STOP"};
 /* the context's own bindings, besides the game's that it follows (s_gameplayFollow) */
 static const InputBindingRef s_gameplayDefaults[GA_COUNT][INPUT_MAX_BINDINGS] = {
-    /* GA_JUMP      */ {NONE, NONE, NONE, NONE},
-    /* GA_RUN       */ {NONE, NONE, NONE, NONE},
-    /* GA_ACTION    */ {NONE, NONE, NONE, NONE},
-    /* GA_SNEAK     */ {NONE, NONE, NONE, NONE},
-    /* GA_LOOK      */ {NONE, NONE, NONE, NONE},
-    /* GA_ITEMWHEEL */ {NONE, NONE, NONE, NONE},
-    /* GA_CAM_LEFT  */ {NONE, NONE, NONE, NONE},
-    /* GA_CAM_RIGHT */ {NONE, NONE, NONE, NONE},
-    /* GA_MAP       */ {NONE, NONE, NONE, NONE},
-    /* GA_PAUSE     */ {NONE, NONE, KEY(DIK_ESCAPE), NONE}, /* Esc is fixed in InputMgr::Poll, outside the table */
-    /* GA_STOP_RUN  */ {NONE, NONE, NONE, NONE},            /* pressed by Gameplay_PostProcess only */
+    /* the new controls' layout (the keyboard as InputMgr::ApplyDefaultKeyChanges sets it; the controller as the
+     * PlayStation game: buttons by position) */
+    /* GA_JUMP      */ {INPUT_KEY(DIK_SPACE), INPUT_PAD(INPUT_PAD_WEST), NONE, NONE},
+    /* GA_RUN       */ {INPUT_KEY(DIK_Z), INPUT_PAD(INPUT_PAD_EAST), NONE, NONE},
+    /* GA_ACTION    */ {INPUT_MOUSE(0), INPUT_KEY(DIK_X), INPUT_PAD(INPUT_PAD_SOUTH), NONE},
+    /* GA_SNEAK     */ {INPUT_KEY(DIK_LSHIFT), INPUT_PAD(INPUT_BIND_R1), NONE, NONE},
+    /* GA_LOOK      */ {INPUT_KEY(DIK_C), INPUT_PAD(INPUT_PAD_NORTH), NONE, NONE},
+    /* GA_ITEMWHEEL */ {INPUT_KEY(DIK_LMENU), INPUT_PAD(INPUT_BIND_L1), NONE, NONE},
+    /* GA_CAM_LEFT  */ {INPUT_KEY(DIK_Q), INPUT_PAD(INPUT_BIND_L2), NONE, NONE},
+    /* GA_CAM_RIGHT */ {INPUT_KEY(DIK_E), INPUT_PAD(INPUT_BIND_R2), NONE, NONE},
+    /* GA_MAP       */ {INPUT_KEY(DIK_TAB), INPUT_PAD(INPUT_BIND_SELECT), NONE, NONE},
+    /* GA_PAUSE     */ {INPUT_KEY(DIK_ESCAPE), INPUT_PAD(INPUT_BIND_START), NONE, NONE},
+    /* GA_STOP_RUN  */ {NONE, NONE, NONE, NONE}, /* pressed by Gameplay_PostProcess only */
 };
+/* Legacy Controls: the disc's keyboard layout (DefKConf.BSC; sneak on C, the port's change: macOS takes Ctrl + the
+ * arrows), the arrows to move. The controller as in the new controls */
+static const InputBindingRef s_gameplayLegacyDefaults[GA_COUNT][INPUT_MAX_BINDINGS] = {
+    /* GA_JUMP      */ {INPUT_KEY(DIK_SPACE), INPUT_PAD(INPUT_PAD_WEST), NONE, NONE},
+    /* GA_RUN       */ {INPUT_KEY(DIK_Z), INPUT_PAD(INPUT_PAD_EAST), NONE, NONE},
+    /* GA_ACTION    */ {INPUT_KEY(DIK_X), INPUT_PAD(INPUT_PAD_SOUTH), NONE, NONE},
+    /* GA_SNEAK     */ {INPUT_KEY(DIK_C), INPUT_PAD(INPUT_BIND_R1), NONE, NONE},
+    /* GA_LOOK      */ {INPUT_KEY(DIK_LSHIFT), INPUT_PAD(INPUT_PAD_NORTH), NONE, NONE},
+    /* GA_ITEMWHEEL */ {INPUT_KEY(DIK_LMENU), INPUT_PAD(INPUT_BIND_L1), NONE, NONE},
+    /* GA_CAM_LEFT  */ {INPUT_KEY(DIK_A), INPUT_PAD(INPUT_BIND_L2), NONE, NONE},
+    /* GA_CAM_RIGHT */ {INPUT_KEY(DIK_S), INPUT_PAD(INPUT_BIND_R2), NONE, NONE},
+    /* GA_MAP       */ {INPUT_KEY(DIK_F12), INPUT_PAD(INPUT_BIND_SELECT), NONE, NONE},
+    /* GA_PAUSE     */ {INPUT_KEY(DIK_ESCAPE), INPUT_PAD(INPUT_BIND_START), NONE, NONE},
+    /* GA_STOP_RUN  */ {NONE, NONE, NONE, NONE},
+};
+
 /* the remappable actions through g_inputMap (ScnControllable::ReadPad's g_padMasks indices: 4 camera left .. 11
  * jump); Select and Start are fixed */
 static const InputFollow s_gameplayFollow[GA_COUNT] = {
@@ -125,22 +149,28 @@ static const InputBindingRef s_defuseDefaults[DA_COUNT][INPUT_MAX_BINDINGS] = {
  * reads no d-pad in play: this context's own). Look: the right stick and the mouse */
 static const char *const s_gameplayAxisNames[GX_COUNT] = {"MOVE", "LOOK"};
 static const InputAxisBindingRef s_gameplayAxisDefaults[GX_COUNT][INPUT_MAX_AXIS_BINDINGS] = {
-    /* GX_MOVE */ {AXIS_NONE, AXIS(AXSRC_PAD_LEFT_STICK), AXIS(AXSRC_PAD_DPAD)},
+    /* GX_MOVE */ {AXIS_KEYS(DIK_W, DIK_D, DIK_S, DIK_A), AXIS(AXSRC_PAD_LEFT_STICK), AXIS(AXSRC_PAD_DPAD)},
     /* GX_LOOK */ {AXIS(AXSRC_PAD_RIGHT_STICK), AXIS(AXSRC_MOUSE), AXIS_NONE},
 };
 
 static void Gameplay_PostProcess(u8 ctx, u32 *down);
+
+static const InputAxisBindingRef s_gameplayLegacyAxisDefaults[GX_COUNT][INPUT_MAX_AXIS_BINDINGS] = {
+    /* GX_MOVE */ {AXIS_KEYS(DIK_UP, DIK_RIGHT, DIK_DOWN, DIK_LEFT), AXIS(AXSRC_PAD_LEFT_STICK), AXIS(AXSRC_PAD_DPAD)},
+    /* GX_LOOK */ {AXIS(AXSRC_PAD_RIGHT_STICK), AXIS(AXSRC_MOUSE), AXIS_NONE},
+};
 
 static const char *const s_cineNames[CA_COUNT] = {"SKIP"};
 static const InputBindingRef s_cineDefaults[CA_COUNT][INPUT_MAX_BINDINGS] = {
     {KEY(DIK_ESCAPE), PAD(INPUT_BIND_START), PAD(INPUT_BIND_CROSS), NONE}};
 
 static const InputContextDef s_contexts[ICTX_COUNT] = {
-    {"GAMEPLAY", GA_COUNT, s_gameplayNames, s_gameplayDefaults, s_gameplayFollow, 0, GX_COUNT, s_gameplayAxisNames,
-     s_gameplayAxisDefaults, GX_MOVE, Gameplay_PostProcess},
-    {"MENU", MA_COUNT, s_menuNames, s_menuDefaults, 0, 1, 0, 0, 0, -1, 0},
-    {"DEFUSE", DA_COUNT, s_defuseNames, s_defuseDefaults, 0, 0, 0, 0, 0, -1, 0},
-    {"CINEMATIC", CA_COUNT, s_cineNames, s_cineDefaults, 0, 0, 0, 0, 0, -1, 0},
+    {"GAMEPLAY", GA_COUNT, s_gameplayNames, s_gameplayDefaults, 0, 0, GX_COUNT, s_gameplayAxisNames,
+     s_gameplayAxisDefaults, -1, Gameplay_PostProcess, s_gameplayLegacyDefaults, s_gameplayLegacyAxisDefaults,
+     "InputGameplay"},
+    {"MENU", MA_COUNT, s_menuNames, s_menuDefaults, 0, 1, 0, 0, 0, -1, 0, 0, 0, 0},
+    {"DEFUSE", DA_COUNT, s_defuseNames, s_defuseDefaults, 0, 0, 0, 0, 0, -1, 0, 0, 0, 0},
+    {"CINEMATIC", CA_COUNT, s_cineNames, s_cineDefaults, 0, 0, 0, 0, 0, -1, 0, 0, 0, 0},
 };
 
 /* ---- the state ---- */
@@ -220,15 +250,20 @@ static void Input_Follow(u8 ctx)
     }
 }
 
+/* the defaults of the controls in force: the legacy ones with Legacy Controls on, when the context has them */
 void Input_ResetBindings(u8 ctx)
 {
+    const InputContextDef *def;
+    u8 legacy;
     if (!Input_ValidContext(ctx))
         return;
-    memcpy(s_state[ctx].bindings, s_contexts[ctx].defaults,
-           s_contexts[ctx].actionCount * INPUT_MAX_BINDINGS * sizeof(InputBindingRef));
-    if (s_contexts[ctx].axisCount)
-        memcpy(s_state[ctx].axisBindings, s_contexts[ctx].axisDefaults,
-               s_contexts[ctx].axisCount * INPUT_MAX_AXIS_BINDINGS * sizeof(InputAxisBindingRef));
+    def = &s_contexts[ctx];
+    legacy = g_legacyControls && def->legacyDefaults;
+    memcpy(s_state[ctx].bindings, legacy ? def->legacyDefaults : def->defaults,
+           def->actionCount * INPUT_MAX_BINDINGS * sizeof(InputBindingRef));
+    if (def->axisCount)
+        memcpy(s_state[ctx].axisBindings, legacy && def->legacyAxisDefaults ? def->legacyAxisDefaults : def->axisDefaults,
+               def->axisCount * INPUT_MAX_AXIS_BINDINGS * sizeof(InputAxisBindingRef));
     s_state[ctx].initialised = 1;
 }
 
@@ -492,8 +527,10 @@ void Input_UpdateActions()
     for (c = 0; c < ICTX_COUNT; c++) {
         const InputContextDef *def = &s_contexts[c];
         u32 down = 0;
-        if (!s_state[c].initialised)
+        if (!s_state[c].initialised) {
             Input_ResetBindings(c);
+            Input_LoadBindings(c); /* the player's, when saved */
+        }
         if (def->followsSlot)
             Input_Follow(c);
         Input_UpdateAxes(c);
@@ -641,6 +678,205 @@ void Input_Rebind(u8 ctx, u8 action, u8 slot, InputBindingRef b)
     if (!s_state[ctx].initialised)
         Input_ResetBindings(ctx);
     s_state[ctx].bindings[action][slot] = b;
+}
+
+/* ---- the player's keys: the controls page (pause_menu.cpp) ----
+ * One keyboard / mouse binding per action and four movement keys, as the page shows them; the controller is not
+ * rebound (its buttons are by position). A key already used by another action or direction moves to the old key of
+ * the one rebound (a swap), so no two share a key and none is left without one. */
+
+static u8 Input_IsKeySource(u8 source)
+{
+    return source == SRC_KEY || source == SRC_MOUSE;
+}
+
+u8 Input_KeyBinding(u8 ctx, u8 action, InputBindingRef *out)
+{
+    u8 k;
+    if (!Input_ValidContext(ctx) || action >= s_contexts[ctx].actionCount)
+        return 0;
+    for (k = 0; k < INPUT_MAX_BINDINGS; k++)
+        if (Input_IsKeySource(s_state[ctx].bindings[action][k].source)) {
+            *out = s_state[ctx].bindings[action][k];
+            return 1;
+        }
+    return 0;
+}
+
+/* the movement keys: the first four-key binding of the context's first axis (gameplay: GX_MOVE) */
+static InputAxisBindingRef *Input_MoveKeys(u8 ctx)
+{
+    u8 k;
+    if (!Input_ValidContext(ctx) || !s_contexts[ctx].axisCount)
+        return 0;
+    for (k = 0; k < INPUT_MAX_AXIS_BINDINGS; k++)
+        if (s_state[ctx].axisBindings[0][k].source == AXSRC_KEYS)
+            return &s_state[ctx].axisBindings[0][k];
+    return 0;
+}
+
+u16 Input_MoveKey(u8 ctx, u8 direction)
+{
+    InputAxisBindingRef *keys = Input_MoveKeys(ctx);
+    return keys && direction < 4 ? keys->keys[direction] : 0;
+}
+
+/* whoever holds `taken` (an action other than `exceptAction`, a direction other than `exceptDirection`) gets `old` */
+static void Input_GiveOldKey(u8 ctx, InputBindingRef taken, InputBindingRef old, u8 exceptAction, u8 exceptDirection)
+{
+    InputAxisBindingRef *keys = Input_MoveKeys(ctx);
+    u8 a, k;
+    for (a = 0; a < s_contexts[ctx].actionCount; a++) {
+        if (a == exceptAction)
+            continue;
+        for (k = 0; k < INPUT_MAX_BINDINGS; k++) {
+            InputBindingRef *b = &s_state[ctx].bindings[a][k];
+            if (b->source == taken.source && b->code == taken.code)
+                *b = old;
+        }
+    }
+    if (keys && taken.source == SRC_KEY)
+        for (k = 0; k < 4; k++)
+            if (k != exceptDirection && keys->keys[k] == taken.code)
+                keys->keys[k] = old.source == SRC_KEY ? old.code : 0; /* a mouse button cannot be a movement key */
+}
+
+void Input_RebindKey(u8 ctx, u8 action, InputBindingRef key)
+{
+    InputBindingRef old = NONE;
+    u8 k, placed = 0;
+    if (!Input_ValidContext(ctx) || action >= s_contexts[ctx].actionCount || !Input_IsKeySource(key.source))
+        return;
+    key.family = INPUT_FAMILY_ANY;
+    Input_KeyBinding(ctx, action, &old);
+    if (old.source == key.source && old.code == key.code)
+        return;
+    Input_GiveOldKey(ctx, key, old, action, 0xff);
+    /* the action's keys: the new one in place of the first, the others cleared (the page shows one) */
+    for (k = 0; k < INPUT_MAX_BINDINGS; k++) {
+        InputBindingRef *b = &s_state[ctx].bindings[action][k];
+        if (!Input_IsKeySource(b->source))
+            continue;
+        if (!placed) {
+            *b = key;
+            placed = 1;
+        } else {
+            b->source = SRC_NONE;
+        }
+    }
+    for (k = 0; k < INPUT_MAX_BINDINGS && !placed; k++)
+        if (s_state[ctx].bindings[action][k].source == SRC_NONE) {
+            s_state[ctx].bindings[action][k] = key;
+            placed = 1;
+        }
+}
+
+void Input_RebindMoveKey(u8 ctx, u8 direction, u16 dik)
+{
+    InputAxisBindingRef *keys = Input_MoveKeys(ctx);
+    InputBindingRef taken = {SRC_KEY, dik, INPUT_FAMILY_ANY}, old = {SRC_KEY, 0, INPUT_FAMILY_ANY};
+    if (!keys || direction >= 4 || keys->keys[direction] == dik)
+        return;
+    old.code = keys->keys[direction];
+    if (!old.code)
+        old.source = SRC_NONE;
+    Input_GiveOldKey(ctx, taken, old, 0xff, direction);
+    keys->keys[direction] = dik;
+}
+
+/* ---- saving the player's bindings: CfgGame\<saveName>, binary ----
+ * u8 version, action count, bindings per action, axis count, bindings per axis; then every binding as u8 source,
+ * u8 family, u16 code; then every axis binding as u8 source, u8 0, u16 keys[4]. A save that does not match the
+ * context's shape (another version of the game) is ignored: the defaults stay. */
+#define INPUT_SAVE_VERSION 1
+#define INPUT_SAVE_MAX (5 + INPUT_MAX_ACTIONS * INPUT_MAX_BINDINGS * 4 + INPUT_MAX_AXES * INPUT_MAX_AXIS_BINDINGS * 10)
+
+static void Input_PutU16(u8 *p, u16 v)
+{
+    p[0] = (u8)v;
+    p[1] = (u8)(v >> 8);
+}
+
+static u16 Input_GetU16(const u8 *p)
+{
+    return (u16)(p[0] | p[1] << 8);
+}
+
+u8 Input_SaveBindings(u8 ctx)
+{
+    const InputContextDef *def;
+    u8 data[INPUT_SAVE_MAX], *p = data, a, k, i;
+    SaveKey *key;
+    if (!Input_ValidContext(ctx) || !(def = &s_contexts[ctx])->saveName || !(key = Save_OpenKey("CfgGame")))
+        return 0;
+    *p++ = INPUT_SAVE_VERSION;
+    *p++ = def->actionCount;
+    *p++ = INPUT_MAX_BINDINGS;
+    *p++ = def->axisCount;
+    *p++ = INPUT_MAX_AXIS_BINDINGS;
+    for (a = 0; a < def->actionCount; a++)
+        for (k = 0; k < INPUT_MAX_BINDINGS; k++, p += 4) {
+            p[0] = s_state[ctx].bindings[a][k].source;
+            p[1] = s_state[ctx].bindings[a][k].family;
+            Input_PutU16(p + 2, s_state[ctx].bindings[a][k].code);
+        }
+    for (a = 0; a < def->axisCount; a++)
+        for (k = 0; k < INPUT_MAX_AXIS_BINDINGS; k++, p += 10) {
+            p[0] = s_state[ctx].axisBindings[a][k].source;
+            p[1] = 0;
+            for (i = 0; i < 4; i++)
+                Input_PutU16(p + 2 + i * 2, s_state[ctx].axisBindings[a][k].keys[i]);
+        }
+    Save_SetValue(key, def->saveName, 3 /* REG_BINARY */, data, (unsigned)(p - data));
+    Save_CloseKey(key);
+    return 1;
+}
+
+u8 Input_LoadBindings(u8 ctx)
+{
+    const InputContextDef *def;
+    u8 data[INPUT_SAVE_MAX];
+    const u8 *p = data;
+    unsigned type = 0, size = sizeof(data);
+    u8 a, k, i, ok;
+    SaveKey *key;
+    if (!Input_ValidContext(ctx) || !(def = &s_contexts[ctx])->saveName || !Save_KeyExists("CfgGame") ||
+        !(key = Save_OpenKey("CfgGame")))
+        return 0;
+    ok = Save_QueryValue(key, def->saveName, &type, data, &size) == SAVE_OK && type == 3 && size >= 5 &&
+         data[0] == INPUT_SAVE_VERSION && data[1] == def->actionCount && data[2] == INPUT_MAX_BINDINGS &&
+         data[3] == def->axisCount && data[4] == INPUT_MAX_AXIS_BINDINGS &&
+         size == 5u + def->actionCount * INPUT_MAX_BINDINGS * 4u + def->axisCount * INPUT_MAX_AXIS_BINDINGS * 10u;
+    Save_CloseKey(key);
+    if (!ok)
+        return 0;
+    p += 5;
+    for (a = 0; a < def->actionCount; a++)
+        for (k = 0; k < INPUT_MAX_BINDINGS; k++, p += 4) {
+            s_state[ctx].bindings[a][k].source = p[0];
+            s_state[ctx].bindings[a][k].family = p[1];
+            s_state[ctx].bindings[a][k].code = Input_GetU16(p + 2);
+        }
+    for (a = 0; a < def->axisCount; a++)
+        for (k = 0; k < INPUT_MAX_AXIS_BINDINGS; k++, p += 10) {
+            s_state[ctx].axisBindings[a][k].source = p[0];
+            for (i = 0; i < 4; i++)
+                s_state[ctx].axisBindings[a][k].keys[i] = Input_GetU16(p + 2 + i * 2);
+        }
+    return 1;
+}
+
+void Input_ForgetBindings(u8 ctx)
+{
+    SaveKey *key;
+    u8 none = 0; /* version 0: read as no save */
+    if (!Input_ValidContext(ctx))
+        return;
+    if (s_contexts[ctx].saveName && (key = Save_OpenKey("CfgGame")) != 0) {
+        Save_SetValue(key, s_contexts[ctx].saveName, 3 /* REG_BINARY */, &none, 1);
+        Save_CloseKey(key);
+    }
+    Input_ResetBindings(ctx);
 }
 
 const char *Input_ContextName(u8 ctx)
