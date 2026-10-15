@@ -10,6 +10,7 @@
 #define DIERR_INPUTLOST ((HRESULT)0x8007001EL)      /* HRESULT_FROM_WIN32(ERROR_READ_FAULT) */
 #define DIERR_NOTINITIALIZED ((HRESULT)0x80070015L) /* MAKE_HRESULT(1, FACILITY_WIN32, ERROR_NOT_READY) */
 #define DIK_A 0x1E
+#define DIK_BACK 0x0E /* Backspace */
 #define DIK_C 0x2E
 #define DIK_D 0x20
 #define DIK_DOWN 0xD0                               /* DownArrow on arrow keypad */
@@ -18,15 +19,20 @@
 #define DIK_ESCAPE 0x01
 #define DIK_LCONTROL 0x1D
 #define DIK_LEFT 0xCB /* LeftArrow on arrow keypad */
+#define DIK_LMENU 0x38 /* left Alt */
 #define DIK_LSHIFT 0x2A
 #define DIK_NEXT 0xD1 /* PgDn on arrow keypad */
 #define DIK_P 0x19
 #define DIK_PAUSE 0xC5  /* Pause */
 #define DIK_PRIOR 0xC9  /* PgUp on arrow keypad */
 #define DIK_Q 0x10
+#define DIK_RCONTROL 0x9D
 #define DIK_RETURN 0x1C /* Enter on main keyboard */
 #define DIK_RIGHT 0xCD  /* RightArrow on arrow keypad */
+#define DIK_RMENU 0xB8  /* right Alt */
+#define DIK_RSHIFT 0x36
 #define DIK_S 0x1F
+#define DIK_SPACE 0x39
 #define DIK_TAB 0x0F
 #define DIK_UP 0xC8     /* UpArrow on arrow keypad */
 #define DIK_W 0x11

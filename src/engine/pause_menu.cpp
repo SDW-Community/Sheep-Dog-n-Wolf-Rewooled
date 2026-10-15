@@ -208,6 +208,8 @@ void PausedMenu_ItemPaused(u8 msg, MenuPage *item);
 #define SDW_INLINE_FREE_GAME_CLEARFLAGS_U32 1
 #include "game_state_inlines.h"
 #include "../platform/platform.h"
+#include "input/input_actions.h"
+
 #undef SDW_INLINE_FREE_GAME_CLEARFLAGS_U32
 
 /* The constants reach the code unfolded. */
@@ -311,6 +313,7 @@ void PauseMenu_ReturnToRoot()
  * 0x4001), makes the pause menu current at its root. */
 void PauseMenu_Open()
 {
+    Input_PushContext(ICTX_MENU);
     g_pProgress->CopyRecord(g_progressPauseCopy);
     Sound_PauseAll();
     g_pad.SetActuator(0);
@@ -340,7 +343,7 @@ void PauseMenu_Exit()
 {
     HKEY key;
     DWORD len;
-
+    Input_PopContext(ICTX_MENU);
     Menu_Close();
     g_meshOutlinesEnabled = g_pauseMeshOutlines;
     g_pStreamPlayer->Halt();

@@ -109,6 +109,8 @@ int PolyBatcher_CompareSortZ(RenderPoly **a, RenderPoly **b);
 #include "../app/d3dapp_inlines.h"
 #include "psx_dav.h"
 #include "button_icons.h"
+#include "hud/hud_font.h"
+#include "hud/hud_icons.h"
 #undef SDW_INLINE_D3DAPP_CLEARSTATEFLAGSINLINE_U32
 /* the constructor without a texture file: pageCount pages, each an immediate page with its own batch
  * (0xc000 state flags). No caller; the loading constructor below is the one Load_DAVnWAR uses. */
@@ -348,12 +350,12 @@ static void PolyBatcher_FillRGBA8(Texture *page, const u8 *rgba, s32 w, s32 h)
     page->Surface_Unlock();
 }
 
-/* the controller button icons' page (button_icons.cpp); 0 when the build has none or it cannot be made */
-static Texture *PolyBatcher_MakeButtonIconPage(D3DApp *renderer)
+/* a page the port adds (made from RGBA by `build`); 0 when the build has none or it cannot be made */
+static Texture *PolyBatcher_MakePortPage(D3DApp *renderer, u8 *(*build)(u32 *, u32 *))
 {
     u32 w = 0, h = 0;
     s32 err;
-    u8 *rgba = ButtonIcons_BuildPage(&w, &h);
+    u8 *rgba = build(&w, &h);
     Texture *page;
     if (!rgba)
         return 0;
@@ -461,6 +463,8 @@ s32 PolyBatcher::LoadTexturePages(const char *path)
     texturePageCount = 0;
     immediateTexCount = 0;
     g_buttonIconPage = -1;
+    g_hudFontPage = -1;
+    g_hudIconPage = -1;
     textures = 0;
     texStateFlags = 0;
     texBatchVerts = 0;
@@ -482,8 +486,9 @@ s32 PolyBatcher::LoadTexturePages(const char *path)
             stream.ReadU16(1);
             stream.ReadU16(1);
             texturePageCount = stream.ReadU16(1);
-            textures = (Texture **)malloc((texturePageCount + 5) * sizeof(Texture *)); /* + icons + 4 blank */
-            texStateFlags = new u32[texturePageCount + 5];
+            /* + the controller icons + the HUD font + the HUD icons + 4 blank */
+            textures = (Texture **)malloc((texturePageCount + 7) * sizeof(Texture *));
+            texStateFlags = new u32[texturePageCount + 7];
             stream.ReadU32(1);
             stream.ReadU32(1);
             stream.Seek(stream.ReadU32(1));
@@ -540,10 +545,24 @@ s32 PolyBatcher::LoadTexturePages(const char *path)
             } while (iPage < texturePageCount);
             /* the controller icons (a sorted page: they have transparent edges) */
             g_buttonIconPage = -1;
-            if ((textures[iPage] = PolyBatcher_MakeButtonIconPage(renderer)) != 0) {
+            if ((textures[iPage] = PolyBatcher_MakePortPage(renderer, ButtonIcons_BuildPage)) != 0) {
                 texStateFlags[iPage] = RSF_BLEND_ALPHA | RSF_TEXTURED;
                 g_buttonIconPage = (s32)iPage;
                 Platform_Log("controller icons: page %u", (unsigned)iPage);
+                iPage++;
+                texturePageCount++;
+            }
+            /* the new HUD's font (src/engine/hud/hud_font.cpp): sorted too, it is alpha-blended */
+            if ((textures[iPage] = PolyBatcher_MakePortPage(renderer, HudFont_BuildPage)) != 0) {
+                texStateFlags[iPage] = RSF_BLEND_ALPHA | RSF_TEXTURED;
+                g_hudFontPage = (s32)iPage;
+                iPage++;
+                texturePageCount++;
+            }
+            /* the new HUD's PNG icons (src/engine/hud/hud_icons.cpp), read again every level: none, no page */
+            if ((textures[iPage] = PolyBatcher_MakePortPage(renderer, HudIcons_BuildPage)) != 0) {
+                texStateFlags[iPage] = RSF_BLEND_ALPHA | RSF_TEXTURED;
+                g_hudIconPage = (s32)iPage;
                 iPage++;
                 texturePageCount++;
             }

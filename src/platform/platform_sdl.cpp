@@ -174,6 +174,9 @@ unsigned Platform_PollEvents()
                     PerfOverlay_Toggle();
                 if (e.key.key == SDLK_F5 && !e.key.repeat)
                     CamDebug_Toggle();
+                /* the input contexts' stack, to watch it on the F3 overlay (src/engine/input/input_actions.h) */
+                if (e.key.key == SDLK_F6 && !e.key.repeat)
+                    Input_DebugCycleContexts();
                 break;
         }
     }

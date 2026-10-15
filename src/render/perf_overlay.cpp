@@ -5,6 +5,7 @@
 #include "../engine/game_state.h"
 
 void Camera_DebugLine(char *out, int size); /* src/objects/camera.cpp */
+#include "../engine/input/input_actions.h"
 
 static int s_enabled;
 
@@ -130,7 +131,8 @@ int PerfOverlay_Lines(char lines[PERF_OVERLAY_MAX_LINES][PERF_OVERLAY_LINE_SIZE]
     SDL_snprintf(lines[3], PERF_OVERLAY_LINE_SIZE, "PRESENT %5.2f MS  LIMITER %5.2f MS", s_presentMs, s_limiterMs);
     SDL_snprintf(lines[4], PERF_OVERLAY_LINE_SIZE, "DRAWS %u  VERTICES %u", (unsigned)s_draws, (unsigned)s_vertices);
     Camera_DebugLine(lines[5], PERF_OVERLAY_LINE_SIZE);
-    return 6;
+    Input_DebugLine(lines[6], PERF_OVERLAY_LINE_SIZE);
+    return 7;
 }
 
 /* ---- the font ---- */

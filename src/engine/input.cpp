@@ -41,6 +41,7 @@ inline s32 Pad::IsAnalog()
 #include "progress.h"
 #include "maths.h"
 #include "file.h"
+#include "input/input_actions.h"
 extern s32 g_gameTimeMs;
 extern s32 g_dtRawMs;
 #define g_dtRawMs (*(s16 *)&g_dtRawMs)
@@ -291,6 +292,7 @@ void Input_Poll()
                 g_pad.OnConnected_stub();
             break;
     }
+    Input_UpdateActions(); /* the input contexts (input_actions.h), from the same devices; nothing reads them yet */
 }
 
 /* raw stick bytes (centre 0x80) to axes in -256..256: a SQUARE dead zone (0,0 only when BOTH |x| and |y|
