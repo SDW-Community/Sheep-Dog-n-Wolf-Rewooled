@@ -1,0 +1,1 @@
+cmake -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DSDW_IOS_TEAM=M9V37QUPV8  -B build-ios

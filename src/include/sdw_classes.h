@@ -1958,11 +1958,12 @@ public:
     virtual sptr HandleMessage(ScnObject *sender, u32 msgId, void *arg); // CanonSimple_HandleMessage (override)
     virtual void Reset();                          // CanonSimple_Reset (override)
     void AddAimOffset(s16 *, s16, u8);
+    void ClampAimOffset(s16 *, u8);
     void ApplyAim(Vec3s *);
     void MoveTo(Vec3s *);
     void SetState(u8);
     void Translate(Vec3s *);
-    void UpdateAim(Pad *);
+    void UpdateAim();
     u32 csFlags;                                   // CanonSimpleFlags
     u32 stickRepeatMs;                             // ms since the analog step was recomputed (150 ms period)
     u32 dpadRepeatMs;                              // ms since dpadStep last grew

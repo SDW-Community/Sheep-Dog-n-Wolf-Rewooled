@@ -46,15 +46,15 @@ extern s32 g_dtMs;
 #include "camera.h"
 #include "../engine/scn_tools.h"
 #include "../engine/input.h"
+#include "../engine/input/input_actions.h"
+#include "../engine/interface.h"
 
 /* the cinematic header's static copy of the 9-byte opcode stride table (src/engine/cine.cpp, g_cineOpStride). */
 static u8 s_cineOpStride[9] = {0, 8, 8, 4, 2, 2, 4, 2, 2};
 
-#define g_padMasks (g_inputMap + 4)
-
-#define g_padCurButtons (g_pad.cur.buttons)
-
-#define g_padPrevButtons (g_pad.prev.buttons)
+/* the sheep cannon whose rider owns the input (ICTX_CANNON, as CanonSimple's aiming): pushed and popped in
+ * CanonSheep::SetState, only by it */
+static CanonSheep *s_canonSheepOwner;
 
 s32 Scenaric_FindByClass(u16, ScnObject **, s32);
 s32 ObjGrid_QueryBoxPoints(const CollBox *, ScnObject **);
@@ -89,6 +89,7 @@ static inline void StartCine(u32 id, u32 flags, void *text)
 
 void CanonSheep::PostLoadInit()
 {
+    s_canonSheepOwner = 0; /* a level left with Ralph inside: Input_ResetContexts already emptied the stack */
     u16 *props = record;
     {
         loadBox = Scn_GetPropBox(props, 0x24);
@@ -171,10 +172,14 @@ void CanonSheep::Update()
                     break;
                 case CANONSHEEP_ST_WOLF_INSIDE:
                     StartCamera(0x3e00, 0, 0, &launchPos, 700, 0);
-                    if (!(g_padCurButtons & ~g_padMasks[10]) && (g_padPrevButtons & ~g_padMasks[10]) && fireArmed) {
+                    Hud_DrawCannonControls();
+                    /* Fire launches Ralph (the cinematic), Exit lets him out. Fire only once a frame has gone by
+                     * with neither pressed (fireArmed, the disc's guard; ICTX_CANNON's push already ignores the press
+                     * that got him in) */
+                    if (Input_Pressed(ICTX_CANNON, CN_FIRE) && fireArmed) {
                         SetState(CANONSHEEP_ST_CINEMATIC);
                         break;
-                    } else if (!(g_padCurButtons & ~g_padMasks[8]) && (g_padPrevButtons & ~g_padMasks[8]))
+                    } else if (Input_Pressed(ICTX_CANNON, CN_EXIT))
                         SetState(CANONSHEEP_ST_IDLE);
                     else
                         fireArmed = 1;
@@ -249,6 +254,15 @@ void CanonSheep::SetState(u8 next)
         u16 previousPad;
     } work;
     state = next;
+    if (next == CANONSHEEP_ST_WOLF_INSIDE) {
+        if (!s_canonSheepOwner) { /* Ralph gets in: the cannon owns the input until he leaves it */
+            Input_PushContext(ICTX_CANNON);
+            s_canonSheepOwner = this;
+        }
+    } else if (s_canonSheepOwner == this) { /* leaving it, whichever way: launched, out, frozen, reset */
+        Input_PopContext(ICTX_CANNON);
+        s_canonSheepOwner = 0;
+    }
     switch (next) {
         case CANONSHEEP_ST_IDLE:
             if (!loaded)

@@ -27,6 +27,8 @@ u32 Anim_Start(Instance *, Animator *, u16, u32);
 /* ScnControllable input helpers */
 #include "../engine/cine.h"
 #include "../engine/input.h"
+#include "../engine/input/input_actions.h"
+#include "../engine/hud/hud_prompt.h"
 #include "../engine/maths.h"
 #include "../engine/approach.h"
 #include "../app/app_main.h"
@@ -292,6 +294,31 @@ void ScnControllable::ReadPad(Pad *pad, s32 enable, s32 sneak)
     w.x = w.y = 0;
     w.bits = 0;
     w.magnitude = 0;
+    if (Input_GetMode() == INPUT_MODE_LIVE) { /* live play: the input contexts (attract demos replay g_pad below) */
+        if (enable) {
+            w.magnitude = Input_Axis2D(ICTX_GAMEPLAY, GX_MOVE, &w.x, &w.y);
+            if (Input_Pressed(ICTX_GAMEPLAY, GA_JUMP))
+                w.bits |= WOLF_ACT_JUMP_EDGE | WOLF_ACT_DOUBLE_JUMP;
+            if (Input_Held(ICTX_GAMEPLAY, GA_JUMP))
+                w.bits |= WOLF_ACT_JUMP_HELD;
+            if (Input_Pressed(ICTX_GAMEPLAY, GA_RUN))
+                w.bits |= WOLF_ACT_RUN;
+            if (Input_Held(ICTX_GAMEPLAY, GA_RUN))
+                w.bits |= WOLF_ACT_RUN_HELD;
+            if (Input_Pressed(ICTX_GAMEPLAY, GA_ACTION))
+                w.bits |= WOLF_ACT_ACTION_EDGE;
+            if (Input_Held(ICTX_GAMEPLAY, GA_ACTION))
+                w.bits |= WOLF_ACT_ACTION_HELD;
+        }
+        if (sneak && Input_Held(ICTX_GAMEPLAY, GA_SNEAK))
+            w.bits |= WOLF_ACT_SNEAK_HELD;
+        padBits = w.bits;
+        stickX = w.x;
+        stickY = w.y;
+        stickMag = w.magnitude;
+        return;
+    }
+    /* an attract-mode demo (Input_GetMode() is INPUT_MODE_PLAYBACK): the recorded pad, read as the game always read it */
     if (enable) {
         if (pad->cur.typeLen.type == PADTYPE_ANALOG) {
             w.magnitude = Pad_AnalogToStick(pad->cur.leftX, pad->cur.leftY, &w.x, &w.y);
@@ -700,6 +727,22 @@ void ScnControllable::StopMotion()
     bounceNormal.z = 0;
 }
 
+/* the space between the prompt's icon and its label, in HUD units: the label is one space after the icon's cell and
+ * this much further right (a space of the game font is 15 units, more than this icon needs) */
+#define ACTION_PROMPT_ICON_GAP 6
+
+/* the action whose button the prompt's icon shows: the one of the text on screen (actionPromptText), which is kept
+ * for 500 ms after the prompt changes or goes, so the icon comes, changes and goes with it */
+static u8 s_actionPromptAction;
+
+/* the prompt's icon (src/engine/hud/hud_prompt.h), in the leading space's cell (where the old $B_...$ glyph was,
+ * before the text window moved right by the gap), one layer in front of the text */
+static void Wolf_DrawActionPromptIcon()
+{
+    HudPrompt_DrawAction(ICTX_GAMEPLAY, s_actionPromptAction, 32 + g_pCurFont->glyphWidth / 2,
+                         24 + g_pCurFont->lineHeight / 2, g_screenLayerBase + 7, 1);
+}
+
 /* action-prompt text, icon and panel animation. The original read the held action and the view prompt as the 3rd
  * and 4th words of the context block, after the 8-byte ActionHit; on 64-bit the ActionHit is 16 bytes and those words
  * are its target pointer, so the caller passes the two fields. */
@@ -732,24 +775,29 @@ void Wolf::DrawActionPrompt(ActionHit *primary, s32 heldAction, s32 viewPrompt, 
     w.draw = 1;
     if (w.label) {
         if (w.view)
-            Str_Concat2(w.text, "$B_INTVIEW$ ", w.label);
+            Str_Concat2(w.text, " ", w.label);
         else if (w.sneak)
-            Str_Concat2(w.text, "$B_SNEAK$ ", w.label);
+            Str_Concat2(w.text, " ", w.label);
         else
-            Str_Concat2(w.text, "$B_ACTION$ ", w.label);
+            Str_Concat2(w.text, " ", w.label);
         Text_SetFont(FONT_GAME);
         if (!actionPromptText[0] || g_gameTimeMs > actionPromptTimeMs + 500) {
             Str_Copy(actionPromptText, w.text);
+            s_actionPromptAction = w.view ? GA_LOOK : w.sneak ? GA_SNEAK : GA_ACTION;
             actionPromptTimeMs = g_gameTimeMs;
-            g_actionPromptWidth = (Str_Length(w.label) + 2) * g_pCurFont->glyphWidth;
+            g_actionPromptWidth = (Str_Length(w.label) + 1) * g_pCurFont->glyphWidth + ACTION_PROMPT_ICON_GAP;
             if (g_actionPromptWidth > 450)
                 g_actionPromptWidth = 450;
         }
-        Text_SetWindow(g_screenLayerBase + 8, 32, 24, g_actionPromptWidth + 20, 40, 1);
+        Text_SetWindow(g_screenLayerBase + 8, 32 + ACTION_PROMPT_ICON_GAP, 24, g_actionPromptWidth + 20, 40, 1);
+
         Text_PrintFmt(actionPromptText);
         Hud_EndBox_stub();
+        Wolf_DrawActionPromptIcon();
         g_actionPromptTimer += g_dt;
-    } else {
+    }
+    else
+    {
         if (g_actionPromptTimer > 0) {
             if (g_actionPromptTimer > 2048)
                 g_actionPromptTimer = 2048;
@@ -764,9 +812,10 @@ void Wolf::DrawActionPrompt(ActionHit *primary, s32 heldAction, s32 viewPrompt, 
         }
         if (actionPromptText[0]) {
             Text_SetFont(FONT_GAME);
-            Text_SetWindow(g_screenLayerBase + 8, 32, 24, g_actionPromptWidth + 20, 40, 1);
+            Text_SetWindow(g_screenLayerBase + 8, 32 + ACTION_PROMPT_ICON_GAP, 24, g_actionPromptWidth + 20, 40, 1);
             Text_PrintFmt(actionPromptText);
             Hud_EndBox_stub();
+            Wolf_DrawActionPromptIcon();
         }
     }
     if (w.draw) {

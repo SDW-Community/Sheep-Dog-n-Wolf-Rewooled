@@ -14,6 +14,10 @@
 #include "../engine/map.h"
 #include "../engine/pause_menu.h"
 #include "../engine/text.h"
+#include "../engine/input/input_actions.h"
+class DancingGhostManager;
+/* the manager whose round owns the input (ICTX_DANCE): pushed and popped in DancingGhostManager::SetState, only by it */
+static DancingGhostManager *s_danceOwner;
 class ScnObject;
 class Camera;
 void Camera_StartScripted(ScnObject *, Camera *, u16, u16, u16, Vec3s *, u16, u32, s32);
@@ -347,6 +351,7 @@ void DancingGhostManager::PostLoadInit()
 {
     u16 time;
     void *recordData = record;
+    s_danceOwner = 0; /* a level left mid-round: Input_ResetContexts already emptied the stack */
     spriteSquare.LoadFromRes(DAV_IDI_IMNPADS_);
     spriteTriangle.LoadFromRes(DAV_IDI_IMNPADT_);
     spriteCircle.LoadFromRes(DAV_IDI_IMNPADC_);
@@ -650,6 +655,15 @@ void DancingGhostManager::SetState(u8 value, s32 advanceStep)
     danceIndex = 0;
     tambSlot = 0;
     state = value;
+    if (value == DGMGR_ST_DANCE) {
+        if (!s_danceOwner) { /* a round starts: it owns the input until it leaves */
+            Input_PushContext(ICTX_DANCE);
+            s_danceOwner = this;
+        }
+    } else if (s_danceOwner == this) { /* leaving it, whichever way: cleared, failed, wandered off, reset */
+        Input_PopContext(ICTX_DANCE);
+        s_danceOwner = 0;
+    }
     switch (value) {
         case DGMGR_ST_CINEMATIC:
             StartSceneInline((u16)cineId, cineFlags, cineText);

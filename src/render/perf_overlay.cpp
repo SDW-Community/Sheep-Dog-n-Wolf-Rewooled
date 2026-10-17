@@ -4,6 +4,9 @@
 #include "perf_overlay.h"
 #include "../engine/game_state.h"
 
+void Camera_DebugLine(char *out, int size); /* src/objects/camera.cpp */
+#include "../engine/input/input_actions.h"
+
 static int s_enabled;
 
 /* the timing points of the current frame (performance counter ticks) */
@@ -127,7 +130,9 @@ int PerfOverlay_Lines(char lines[PERF_OVERLAY_MAX_LINES][PERF_OVERLAY_LINE_SIZE]
     SDL_snprintf(lines[2], PERF_OVERLAY_LINE_SIZE, "GAME %5.2f MS  WORST %5.2f", s_workMs, s_workWorstMs);
     SDL_snprintf(lines[3], PERF_OVERLAY_LINE_SIZE, "PRESENT %5.2f MS  LIMITER %5.2f MS", s_presentMs, s_limiterMs);
     SDL_snprintf(lines[4], PERF_OVERLAY_LINE_SIZE, "DRAWS %u  VERTICES %u", (unsigned)s_draws, (unsigned)s_vertices);
-    return 5;
+    Camera_DebugLine(lines[5], PERF_OVERLAY_LINE_SIZE);
+    Input_DebugLine(lines[6], PERF_OVERLAY_LINE_SIZE);
+    return 7;
 }
 
 /* ---- the font ---- */

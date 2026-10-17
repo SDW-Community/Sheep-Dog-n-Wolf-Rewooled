@@ -44,6 +44,8 @@ void Text_PutColorCode(char *out, u32 rgb);
 void Text_ResetMeasure();
 u8 Text_ResetWindow();
 void Text_ScrambleGlyphs(char *s);
+/* the button-glyph blink's frame now: 0, 1 or 2 (a third of a 0xbb ms cycle each); the HUD icons animate by it */
+u8 Text_BlinkFrame();
 void Text_SetColor(u32 rgb);
 void Text_SetCursor(s16 x, s16 y);
 void Text_SetFont(u8 fontId);

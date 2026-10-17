@@ -29,6 +29,7 @@ u8 Dialogue_Show(void *text, s32 arg);
 void Dialogue_StopVoice();
 void Fade_DrawOverlay(bool white, u8 level, s16 *rect);
 void Hud_DrawCannonMask();
+void Hud_DrawCannonControls(); /* the cannons' Fire / Exit panels (ICTX_CANNON), top-left (canonsimple.cpp) */
 void Hud_DrawTelescopeMask(bool);
 void Interface_Init();
 void Letterbox_Update();

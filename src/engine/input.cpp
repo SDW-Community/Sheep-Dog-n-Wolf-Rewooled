@@ -41,6 +41,7 @@ inline s32 Pad::IsAnalog()
 #include "progress.h"
 #include "maths.h"
 #include "file.h"
+#include "input/input_actions.h"
 extern s32 g_gameTimeMs;
 extern s32 g_dtRawMs;
 #define g_dtRawMs (*(s16 *)&g_dtRawMs)
@@ -140,8 +141,10 @@ void Pad_ReadRaw(Pad *pad)
         pad->raw.typeLen.type = g_pad.padType;
         pad->raw.leftX = g_inputMgr.axisX;
         pad->raw.leftY = g_inputMgr.axisY;
-        pad->raw.rightX = g_inputMgr.rightX; /* the original PC build left the right stick centred (no DirectInput axis
-        pad->raw.rightY = g_inputMgr.rightY;  * fed it): the camera code reads it as on the PlayStation */
+        /* the right stick: the original PC build left it centred (no DirectInput axis fed it); the camera code reads
+         * it as on the PlayStation */
+        pad->raw.rightX = g_inputMgr.rightX;
+        pad->raw.rightY = g_inputMgr.rightY;
         pad->raw.buttons = g_inputMgr.padBits;
     }
 }
@@ -289,6 +292,7 @@ void Input_Poll()
                 g_pad.OnConnected_stub();
             break;
     }
+    Input_UpdateActions(); /* the input contexts (input_actions.h), from the same devices; nothing reads them yet */
 }
 
 /* raw stick bytes (centre 0x80) to axes in -256..256: a SQUARE dead zone (0,0 only when BOTH |x| and |y|

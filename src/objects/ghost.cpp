@@ -211,6 +211,8 @@ void Ghost::Reset()
  * per-state body. */
 void Ghost::Update()
 {
+    SetVisible(0);
+    SetState(GHOST_ST_IDLE);
     Vec3s wdir2;
     Vec3s rev;
     u8 i;
@@ -239,6 +241,10 @@ void Ghost::Update()
         }
     }
     s32 fadeUpdates = fadeDir ? Time_ScaleStep(1, fadeRemainder) : 0;
+    /* */
+
+
+    /* */
     while (fadeDir && fadeUpdates-- > 0) {
         tintR = (u8)(tintR + fadeDir * stepR / 10);
         tintG = (u8)(tintG + fadeDir * stepG / 10);
@@ -273,6 +279,7 @@ void Ghost::Update()
             fadeDir = 0;
         }
     }
+
     switch (state) {
         case GHOST_ST_IDLE: /* idle: pick the first leg once the level is running */
             if (!beingSucked) {
@@ -496,6 +503,8 @@ void Ghost::Update()
             StartChaseCamera(0);
             break;
     }
+
+
     AdvanceAnim();
 }
 
