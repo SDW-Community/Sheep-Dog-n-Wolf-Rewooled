@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The iOS app bundle (CMakeLists.txt): the game is its executable, its data is copied into it. CMake fills in the
+     ${...} values. -->
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleExecutable</key>
+    <string>${MACOSX_BUNDLE_EXECUTABLE_NAME}</string>
+    <key>CFBundleIdentifier</key>
+    <string>${MACOSX_BUNDLE_GUI_IDENTIFIER}</string>
+    <key>CFBundleName</key>
+    <string>${MACOSX_BUNDLE_BUNDLE_NAME}</string>
+    <key>CFBundleDisplayName</key>
+    <string>${MACOSX_BUNDLE_BUNDLE_NAME}</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>${MACOSX_BUNDLE_SHORT_VERSION_STRING}</string>
+    <key>CFBundleVersion</key>
+    <string>${MACOSX_BUNDLE_BUNDLE_VERSION}</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>LSRequiresIPhoneOS</key>
+    <true/>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.games</string>
+    <!-- no storyboard: an empty launch screen, which also gives the app the whole screen -->
+    <key>UILaunchScreen</key>
+    <dict/>
+    <key>UIRequiresFullScreen</key>
+    <true/>
+    <key>UIStatusBarHidden</key>
+    <true/>
+    <key>UIViewControllerBasedStatusBarAppearance</key>
+    <false/>
+    <!-- the game is landscape -->
+    <key>UISupportedInterfaceOrientations</key>
+    <array>
+        <string>UIInterfaceOrientationLandscapeLeft</string>
+        <string>UIInterfaceOrientationLandscapeRight</string>
+    </array>
+    <key>UISupportedInterfaceOrientations~ipad</key>
+    <array>
+        <string>UIInterfaceOrientationLandscapeLeft</string>
+        <string>UIInterfaceOrientationLandscapeRight</string>
+    </array>
+    <!-- a mouse or trackpad (iPad) reaches the game as a mouse (SDL asks for this) -->
+    <key>UIApplicationSupportsIndirectInputEvents</key>
+    <true/>
+    <!-- controllers: the game is played with one (no touch controls) -->
+    <key>GCSupportsControllerUserInteraction</key>
+    <true/>
+    <key>GCSupportedGameControllers</key>
+    <array>
+        <dict>
+            <key>ProfileName</key>
+            <string>ExtendedGamepad</string>
+        </dict>
+    </array>
+</dict>
+</plist>

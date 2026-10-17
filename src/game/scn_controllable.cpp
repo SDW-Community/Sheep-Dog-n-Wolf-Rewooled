@@ -727,6 +727,22 @@ void ScnControllable::StopMotion()
     bounceNormal.z = 0;
 }
 
+/* the space between the prompt's icon and its label, in HUD units: the label is one space after the icon's cell and
+ * this much further right (a space of the game font is 15 units, more than this icon needs) */
+#define ACTION_PROMPT_ICON_GAP 6
+
+/* the action whose button the prompt's icon shows: the one of the text on screen (actionPromptText), which is kept
+ * for 500 ms after the prompt changes or goes, so the icon comes, changes and goes with it */
+static u8 s_actionPromptAction;
+
+/* the prompt's icon (src/engine/hud/hud_prompt.h), in the leading space's cell (where the old $B_...$ glyph was,
+ * before the text window moved right by the gap), one layer in front of the text */
+static void Wolf_DrawActionPromptIcon()
+{
+    HudPrompt_DrawAction(ICTX_GAMEPLAY, s_actionPromptAction, 32 + g_pCurFont->glyphWidth / 2,
+                         24 + g_pCurFont->lineHeight / 2, g_screenLayerBase + 7, 1);
+}
+
 /* action-prompt text, icon and panel animation. The original read the held action and the view prompt as the 3rd
  * and 4th words of the context block, after the 8-byte ActionHit; on 64-bit the ActionHit is 16 bytes and those words
  * are its target pointer, so the caller passes the two fields. */
@@ -759,27 +775,25 @@ void Wolf::DrawActionPrompt(ActionHit *primary, s32 heldAction, s32 viewPrompt, 
     w.draw = 1;
     if (w.label) {
         if (w.view)
-            Str_Concat2(w.text, "  ", w.label);
+            Str_Concat2(w.text, " ", w.label);
         else if (w.sneak)
-            Str_Concat2(w.text, "  ", w.label);
+            Str_Concat2(w.text, " ", w.label);
         else
-            Str_Concat2(w.text, "  ", w.label);
+            Str_Concat2(w.text, " ", w.label);
         Text_SetFont(FONT_GAME);
         if (!actionPromptText[0] || g_gameTimeMs > actionPromptTimeMs + 500) {
             Str_Copy(actionPromptText, w.text);
+            s_actionPromptAction = w.view ? GA_LOOK : w.sneak ? GA_SNEAK : GA_ACTION;
             actionPromptTimeMs = g_gameTimeMs;
-            g_actionPromptWidth = (Str_Length(w.label) + 2) * g_pCurFont->glyphWidth;
+            g_actionPromptWidth = (Str_Length(w.label) + 1) * g_pCurFont->glyphWidth + ACTION_PROMPT_ICON_GAP;
             if (g_actionPromptWidth > 450)
                 g_actionPromptWidth = 450;
         }
-        Text_SetWindow(g_screenLayerBase + 8, 32, 24, g_actionPromptWidth + 20, 40, 1);
+        Text_SetWindow(g_screenLayerBase + 8, 32 + ACTION_PROMPT_ICON_GAP, 24, g_actionPromptWidth + 20, 40, 1);
 
         Text_PrintFmt(actionPromptText);
         Hud_EndBox_stub();
-        /* the new prompt (src/engine/hud/hud_prompt.h), over the old $B_...$ glyph: the first character cell of the
-         * text window, one layer in front of the text */
-        HudPrompt_DrawAction(ICTX_GAMEPLAY, w.view ? GA_LOOK : w.sneak ? GA_SNEAK : GA_ACTION,
-                             32 + g_pCurFont->glyphWidth / 2, 24 + g_pCurFont->lineHeight / 2, g_screenLayerBase + 7);
+        Wolf_DrawActionPromptIcon();
         g_actionPromptTimer += g_dt;
     }
     else
@@ -798,9 +812,10 @@ void Wolf::DrawActionPrompt(ActionHit *primary, s32 heldAction, s32 viewPrompt, 
         }
         if (actionPromptText[0]) {
             Text_SetFont(FONT_GAME);
-            Text_SetWindow(g_screenLayerBase + 8, 32, 24, g_actionPromptWidth + 20, 40, 1);
+            Text_SetWindow(g_screenLayerBase + 8, 32 + ACTION_PROMPT_ICON_GAP, 24, g_actionPromptWidth + 20, 40, 1);
             Text_PrintFmt(actionPromptText);
             Hud_EndBox_stub();
+            Wolf_DrawActionPromptIcon();
         }
     }
     if (w.draw) {

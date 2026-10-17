@@ -83,13 +83,11 @@ static const char *const s_gameplayNames[GA_COUNT] = {"JUMP",  "RUN",   "ACTION"
                                                       "CAM-L", "CAM-R", "MAP",    "PAUSE", "STOP"};
 /* the context's own bindings, besides the game's that it follows (s_gameplayFollow) */
 static const InputBindingRef s_gameplayDefaults[GA_COUNT][INPUT_MAX_BINDINGS] = {
-    /* the new controls' layout (the keyboard as InputMgr::ApplyDefaultKeyChanges sets it; the controller as the
-     * PlayStation game: buttons by position) */
-    /* GA_JUMP      */ {INPUT_KEY(DIK_SPACE), INPUT_PAD(INPUT_PAD_WEST), NONE, NONE},
+    /* GA_JUMP      */ {INPUT_KEY(DIK_SPACE), INPUT_PAD(INPUT_PAD_SOUTH), NONE, NONE},
     /* GA_RUN       */ {INPUT_KEY(DIK_Z), INPUT_PAD(INPUT_PAD_EAST), NONE, NONE},
-    /* GA_ACTION    */ {INPUT_MOUSE(0), INPUT_KEY(DIK_X), INPUT_PAD(INPUT_PAD_SOUTH), NONE},
+    /* GA_ACTION    */ {INPUT_MOUSE(0), INPUT_KEY(DIK_X), INPUT_PAD(INPUT_PAD_WEST), NONE},
     /* GA_SNEAK     */ {INPUT_KEY(DIK_LSHIFT), INPUT_PAD(INPUT_BIND_R1), NONE, NONE},
-    /* GA_LOOK      */ {INPUT_KEY(DIK_C), INPUT_PAD(INPUT_PAD_NORTH), NONE, NONE},
+    /* GA_LOOK      */ {INPUT_KEY(DIK_C), INPUT_PAD(INPUT_BIND_L3), NONE, NONE},
     /* GA_ITEMWHEEL */ {INPUT_KEY(DIK_LMENU), INPUT_PAD(INPUT_BIND_L1), NONE, NONE},
     /* GA_CAM_LEFT  */ {INPUT_KEY(DIK_Q), INPUT_PAD(INPUT_BIND_L2), NONE, NONE},
     /* GA_CAM_RIGHT */ {INPUT_KEY(DIK_E), INPUT_PAD(INPUT_BIND_R2), NONE, NONE},
@@ -164,6 +162,39 @@ static const char *const s_cineNames[CA_COUNT] = {"SKIP"};
 static const InputBindingRef s_cineDefaults[CA_COUNT][INPUT_MAX_BINDINGS] = {
     {KEY(DIK_ESCAPE), PAD(INPUT_BIND_START), PAD(INPUT_BIND_CROSS), NONE}};
 
+/* the dance's four steps: the defusal's keys, the face buttons and the d-pad */
+static const char *const s_danceNames[DN_COUNT] = {"TOP", "RIGHT", "LEFT", "BOTTOM"};
+static const InputBindingRef s_danceDefaults[DN_COUNT][INPUT_MAX_BINDINGS] = {
+    /* DN_TOP    */ {KEY(DIK_W), PAD(INPUT_BIND_TRIANGLE), DPAD(PLATFORM_DPAD_UP), NONE},
+    /* DN_RIGHT  */ {KEY(DIK_D), PAD(INPUT_BIND_CIRCLE), DPAD(PLATFORM_DPAD_RIGHT), NONE},
+    /* DN_LEFT   */ {KEY(DIK_A), PAD(INPUT_BIND_SQUARE), DPAD(PLATFORM_DPAD_LEFT), NONE},
+    /* DN_BOTTOM */ {KEY(DIK_S), PAD(INPUT_BIND_CROSS), DPAD(PLATFORM_DPAD_DOWN), NONE},
+};
+
+/* the cannon's aiming: fire on the gameplay Action's keys and button, leave on the right mouse button, Backspace or
+ * the north button (Triangle, as on the disc) */
+static const char *const s_cannonNames[CN_COUNT] = {"FIRE", "EXIT"};
+static const InputBindingRef s_cannonDefaults[CN_COUNT][INPUT_MAX_BINDINGS] = {
+    /* CN_FIRE */ {MOUSE(0), KEY(DIK_X), PAD(INPUT_PAD_WEST), NONE},
+    /* CN_EXIT */ {MOUSE(1), KEY(DIK_BACK), PAD(INPUT_PAD_NORTH), NONE},
+};
+/* Legacy Controls: fire where the legacy Action is (X, the south button); no mouse */
+static const InputBindingRef s_cannonLegacyDefaults[CN_COUNT][INPUT_MAX_BINDINGS] = {
+    /* CN_FIRE */ {KEY(DIK_X), PAD(INPUT_PAD_SOUTH), NONE, NONE},
+    /* CN_EXIT */ {KEY(DIK_BACK), PAD(INPUT_PAD_NORTH), NONE, NONE},
+};
+
+static const char *const s_cannonAxisNames[CX_COUNT] = {"AIM", "STEP"};
+static const InputAxisBindingRef s_cannonAxisDefaults[CX_COUNT][INPUT_MAX_AXIS_BINDINGS] = {
+    /* CX_AIM  */ {AXIS(AXSRC_MOUSE), AXIS(AXSRC_PAD_RIGHT_STICK), AXIS_NONE},
+    /* CX_STEP */ {AXIS_KEYS(DIK_W, DIK_D, DIK_S, DIK_A), AXIS(AXSRC_PAD_DPAD), AXIS_NONE},
+};
+/* Legacy Controls: the disc's layout, no mouse (it is not captured then); the arrows, as the legacy Move */
+static const InputAxisBindingRef s_cannonLegacyAxisDefaults[CX_COUNT][INPUT_MAX_AXIS_BINDINGS] = {
+    /* CX_AIM  */ {AXIS(AXSRC_PAD_RIGHT_STICK), AXIS_NONE, AXIS_NONE},
+    /* CX_STEP */ {AXIS_KEYS(DIK_UP, DIK_RIGHT, DIK_DOWN, DIK_LEFT), AXIS(AXSRC_PAD_DPAD), AXIS_NONE},
+};
+
 static const InputContextDef s_contexts[ICTX_COUNT] = {
     {"GAMEPLAY", GA_COUNT, s_gameplayNames, s_gameplayDefaults, 0, 0, GX_COUNT, s_gameplayAxisNames,
      s_gameplayAxisDefaults, -1, Gameplay_PostProcess, s_gameplayLegacyDefaults, s_gameplayLegacyAxisDefaults,
@@ -171,6 +202,9 @@ static const InputContextDef s_contexts[ICTX_COUNT] = {
     {"MENU", MA_COUNT, s_menuNames, s_menuDefaults, 0, 1, 0, 0, 0, -1, 0, 0, 0, 0},
     {"DEFUSE", DA_COUNT, s_defuseNames, s_defuseDefaults, 0, 0, 0, 0, 0, -1, 0, 0, 0, 0},
     {"CINEMATIC", CA_COUNT, s_cineNames, s_cineDefaults, 0, 0, 0, 0, 0, -1, 0, 0, 0, 0},
+    {"DANCE", DN_COUNT, s_danceNames, s_danceDefaults, 0, 0, 0, 0, 0, -1, 0, 0, 0, 0},
+    {"CANNON", CN_COUNT, s_cannonNames, s_cannonDefaults, 0, 0, CX_COUNT, s_cannonAxisNames, s_cannonAxisDefaults, -1,
+     0, s_cannonLegacyDefaults, s_cannonLegacyAxisDefaults, 0},
 };
 
 /* ---- the state ---- */

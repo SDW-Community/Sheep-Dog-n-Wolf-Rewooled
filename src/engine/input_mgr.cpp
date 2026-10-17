@@ -466,7 +466,7 @@ static void InputMgr_LoadLegacyControls()
 void Input_SetLegacyControls(u8 on)
 {
     SaveKey *key;
-    u8 device;
+    u8 device, context;
     g_legacyControls = on ? 1 : 0;
     s_legacyControlsLoaded = 1;
     if ((key = Save_OpenKey("CfgGame")) != 0) {
@@ -475,6 +475,9 @@ void Input_SetLegacyControls(u8 on)
     }
     Save_DeleteKey("Config");
     Input_ForgetBindings(ICTX_GAMEPLAY); /* the player's keys too: the new controls' or the legacy ones' defaults */
+    for (context = 0; context < ICTX_COUNT; context++) /* and every other context's defaults (the cannon's, ...) */
+        if (context != ICTX_GAMEPLAY)
+            Input_ResetBindings(context);
     device = g_inputMgr.GetCurrentDeviceIdx();
     g_inputMgr.LoadConfig(g_dirReference);
     g_inputMgr.SelectDevice(device);

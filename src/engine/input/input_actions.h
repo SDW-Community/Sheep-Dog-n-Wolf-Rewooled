@@ -10,7 +10,7 @@
 #include "sdw_types.h"
 
 /* who owns the input */
-enum InputContextId { ICTX_GAMEPLAY, ICTX_MENU, ICTX_DEFUSE, ICTX_CINEMATIC, ICTX_COUNT };
+enum InputContextId { ICTX_GAMEPLAY, ICTX_MENU, ICTX_DEFUSE, ICTX_CINEMATIC, ICTX_DANCE, ICTX_CANNON, ICTX_COUNT};
 
 /* each context's own actions */
 enum GameplayAction {
@@ -30,6 +30,8 @@ enum GameplayAction {
 enum MenuAction { MA_UP, MA_DOWN, MA_LEFT, MA_RIGHT, MA_CONFIRM, MA_BACK, MA_COUNT };
 enum DefuseAction { DA_TOP, DA_RIGHT, DA_LEFT, DA_BOTTOM, DA_COUNT }; /* the mine's four symbols, as on the pad */
 enum CinematicAction { CA_SKIP, CA_COUNT };
+enum DanceAction { DN_TOP, DN_RIGHT, DN_LEFT, DN_BOTTOM, DN_COUNT }; /* Level 12's dance steps (the ghosts' track), as on the pad */
+enum CannonAction { CN_FIRE, CN_EXIT, CN_COUNT }; /* CanonSimple's aiming */
 
 #define INPUT_MAX_ACTIONS 16
 #define INPUT_MAX_BINDINGS 4 /* per action: e.g. two keys, a controller button and the d-pad */
@@ -82,6 +84,9 @@ struct InputBindingRef {
  * four keys / the d-pad as ±256 (±181 on a diagonal), as ScnControllable::ReadPad builds it. Input_AxisDelta gives the
  * mouse's motion this frame for an axis bound to the mouse (the orbit camera's two inputs, kept apart). */
 enum GameplayAxis { GX_MOVE, GX_LOOK, GX_COUNT };
+/* the cannon: CX_AIM the sticks and the mouse (a speed / a distance), CX_STEP the movement keys and the d-pad (the
+ * disc's d-pad aiming, which speeds up while held) */
+enum CannonAxis { CX_AIM, CX_STEP, CX_COUNT };
 
 #define INPUT_MAX_AXES 4
 #define INPUT_MAX_AXIS_BINDINGS 3

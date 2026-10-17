@@ -1416,6 +1416,9 @@ void PauseMenu_Update()
         g_pauseTextRect[3] = g_pCurFont->lineHeight * 2;
         Text_SetColor(0x4bccff);
         Text_SetWindowRect(g_screenLayerBase + 2, g_pauseTextRect, 1);
+
+        //HudPrompt_DrawAction(ICTX_DEFUSE, s_defuseActions[q], p + g_defuseButtonTable[q].x, r + g_defuseButtonTable[q].y,
+                   //          g_screenLayerBase + 6, 1);
         Text_Printf(TEXTALIGN_CENTER, "%s", g_uiFooterText);
         Hud_EndBox_stub();
         Menu_DrawMessageBox();

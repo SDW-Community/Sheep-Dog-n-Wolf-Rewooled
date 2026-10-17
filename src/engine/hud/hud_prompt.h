@@ -11,8 +11,9 @@
 u8 HudPrompt_Label(u8 ctx, u8 action, char *out, int size);
 
 /* draws the prompt centred at (x, y) in HUD units (512 x 240), on `layer` (g_screenLayerBase + n: a smaller n is in
- * front). Uses the HudElement anchoring in force, so a caller inside a HudElement scope keeps its alignment. 1 when
- * something was drawn. */
-u8 HudPrompt_DrawAction(u8 ctx, u8 action, s32 x, s32 y, u32 *layer);
+ * front). `animate`: an animated icon blinks with the text's button glyphs (as Text_PrintfStyled's `blink`), else
+ * it stays on its first frame. Uses the HudElement anchoring in force, so a caller inside a HudElement scope keeps
+ * its alignment. 1 when something was drawn. */
+u8 HudPrompt_DrawAction(u8 ctx, u8 action, s32 x, s32 y, u32 *layer, u8 animate = 0);
 
 #endif

@@ -44,6 +44,23 @@ void HudDraw_TexturedRect(s32 page, const HudRect *rect, const HudRect *uv, u32 
                    c);
 }
 
+void HudDraw_Image(s32 page, float x, float y, float height, s32 texW, s32 texH, const HudRect *uv, u32 *layer)
+{
+    float ox, sx, oy, sy, w, h;
+    if (page < 0 || texW <= 0 || texH <= 0)
+        return;
+    HudDraw_Mapping(&ox, &sx, &oy, &sy);
+    /* in pixels: `height` units tall, square texels */
+    h = height * sy;
+    w = h * texW / texH;
+    x = ox + x * sx;
+    y = oy + y * sy;
+    /* the batcher's textured pages are MODULATE2X (texture x colour x 2): 0x808080 is the image's own colours, as for
+     * the game's sprites (white would double them, and clip the light ones together) */
+    Draw2D_TexRect(g_screen.Draw2D_LayerToZ(layer), x - w / 2, y - h / 2, x + w / 2, y + h / 2, page, uv->x0, uv->y0,
+                   0x808080, uv->x0, uv->y1, 0x808080, uv->x1, uv->y0, 0x808080, uv->x1, uv->y1, 0x808080);
+}
+
 u8 *HudDraw_LoadImage(const char *relativePath, s32 *width, s32 *height)
 {
     char path[SDW_PATH_MAX];

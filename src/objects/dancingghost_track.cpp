@@ -8,18 +8,36 @@
 #undef SDW_INLINE_SPRITE_DRAWAT_U32_S32_S32
 extern s32 g_dt;
 s32 g_dgMetronomeLatch;
-#include "../engine/input.h"
+#include "../engine/input/input_actions.h"
+#include "../engine/hud/hud_prompt.h"
 #include "dancingghost_manager.h"
-#define g_padPrevButtons (g_pad.prev.buttons)
-#define g_padCurButtons (g_pad.cur.buttons)
 extern u32 *g_screenLayerBase;
 u16 Sound_Play(u16, void *, u16, u8, s32);
+
+/* the dance's steps (ICTX_DANCE) and the PlayStation buttons the level's sequences are written in (sequenceButtons) */
+static const u8 s_danceActions[4] = {DN_TOP, DN_RIGHT, DN_LEFT, DN_BOTTOM};
+static const u16 s_danceButtons[4] = {PAD_TRIANGLE, PAD_CIRCLE, PAD_SQUARE, PAD_CROSS};
+
+/* on a press of any step this frame: every step held, as the active-low pad word the sequences hold (two at once is
+ * a wrong step, as on the disc); PAD_ALL_RELEASED otherwise */
+static u16 DanceTrack_ReadPress()
+{
+    u16 held = PAD_ALL_RELEASED;
+    u8 pressed = 0, i;
+    for (i = 0; i < 4; i++) {
+        pressed |= Input_Pressed(ICTX_DANCE, s_danceActions[i]);
+        if (Input_Held(ICTX_DANCE, s_danceActions[i]))
+            held &= (u16)~s_danceButtons[i];
+    }
+    return pressed ? held : (u16)PAD_ALL_RELEASED;
+}
 s32 DancingGhostManager::UpdateBeatTrack()
 {
     u16 j, expected;
     s16 drawX, yPos;
     s32 changed;
     u16 beatSlot, noteIndex;
+    s8 action;
     changed = 0;
     beatSlot = 0xffff;
     expected = PAD_ALL_RELEASED;
@@ -54,9 +72,8 @@ s32 DancingGhostManager::UpdateBeatTrack()
         }
     }
     if (beatIndex > 2 && !pressHandled) {
-        if (pressedMask == PAD_ALL_RELEASED && g_padPrevButtons != g_padCurButtons) {
-            padMask = g_padCurButtons & (PAD_TRIANGLE | PAD_CIRCLE | PAD_CROSS | PAD_SQUARE);
-            padMask |= (u16) ~(PAD_TRIANGLE | PAD_CIRCLE | PAD_CROSS | PAD_SQUARE);
+        if (pressedMask == PAD_ALL_RELEASED) {
+            padMask = DanceTrack_ReadPress();
             if (padMask != PAD_ALL_RELEASED)
                 pressedMask = padMask;
         }
@@ -105,30 +122,33 @@ s32 DancingGhostManager::UpdateBeatTrack()
                 if (currentSprite)
                     currentSprite->Draw(g_screenLayerBase + 9, drawX, (s16)(yPos - (cellH >> 1)),
                                         (s16)(drawX + (cellW >> 1)), (s16)(yPos + cellH + (cellH >> 1)), 0x808080, 0);
+                action = -1;
                 switch (sequenceButtons[stepIndex][noteIndex]) {
                     case (u16)~PAD_SQUARE:
-                        currentSprite = &spriteSquare;
+                        action = DN_LEFT;
                         drawnStep = AFANTO02_ANIM_DANCE3;
                         break;
                     case (u16)~PAD_TRIANGLE:
-                        currentSprite = &spriteTriangle;
+                        action = DN_TOP;
                         drawnStep = AFANTO02_ANIM_DANCE;
                         break;
                     case (u16)~PAD_CIRCLE:
-                        currentSprite = &spriteCircle;
+                        action = DN_RIGHT;
                         drawnStep = AFANTO02_ANIM_DANCE2;
                         break;
                     case (u16)~PAD_CROSS:
-                        currentSprite = &spriteCross;
+                        action = DN_BOTTOM;
                         drawnStep = AFANTO02_ANIM_DANCE4;
                         break;
                     case PAD_ALL_RELEASED:
-                        currentSprite = 0;
                         drawnStep = AFANTO02_ANIM_DANCE5;
                         break;
                 }
-                if (currentSprite)
-                    currentSprite->DrawAt(g_screenLayerBase + 8, drawX, yPos);
+                /* the new prompts (src/engine/hud/hud_prompt.h): the key bound to this step, at the centre of the
+                 * PlayStation button sprite it replaces (spriteCross's size: cellW, cellH) */
+                if (action >= 0)
+                    HudPrompt_DrawAction(ICTX_DANCE, (u8)action, drawX + (cellW >> 2), yPos + (cellH >> 1),
+                                         g_screenLayerBase + 8);
                 if (noteIndex == beatSlot)
                     currentStep = drawnStep;
             }

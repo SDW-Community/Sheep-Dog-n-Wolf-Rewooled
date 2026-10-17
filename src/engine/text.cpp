@@ -1206,19 +1206,27 @@ void Text_ScrambleGlyphs(char *s)
     }
 }
 
-/* the button-glyph blink: a 0..0xba ms phase from g_rawTimeMs; the first third turns every printable
- * character into its forward variant, the second into its reverse one (colour codes are skipped). */
-void Text_BlinkButtonGlyphs(char *s)
+/* the button-glyph blink's frame: a 0..0xba ms phase from g_rawTimeMs, in thirds (0 forward, 1 reverse, 2 plain).
+ * Advanced by whoever asks first in a millisecond, so the text and the HUD icons (hud_icons.cpp) blink together. */
+u8 Text_BlinkFrame()
 {
-    u8 ch;
-    u32 unused = 0;
     if (g_textBlinkLastMs != g_rawTimeMs) {
         g_textBlinkPhase += g_rawTimeMs - g_textBlinkLastMs;
         if (g_textBlinkPhase > 0xba)
             g_textBlinkPhase = 0;
         g_textBlinkLastMs = g_rawTimeMs;
     }
-    if (g_textBlinkPhase < 0x3e) {
+    return g_textBlinkPhase < 0x3e ? 0 : g_textBlinkPhase < 0x7c ? 1 : 2;
+}
+
+/* the button-glyph blink: the first third turns every printable character into its forward variant, the second
+ * into its reverse one (colour codes are skipped). */
+void Text_BlinkButtonGlyphs(char *s)
+{
+    u8 ch;
+    u32 unused = 0;
+    u8 frame = Text_BlinkFrame();
+    if (frame == 0) {
         while ((ch = *s) != 0) {
             if (ch == 1)
                 s += 3;
@@ -1226,7 +1234,7 @@ void Text_BlinkButtonGlyphs(char *s)
                 *s = g_glyphVariantFwd[ch];
             s++;
         }
-    } else if (g_textBlinkPhase < 0x7c) {
+    } else if (frame == 1) {
         while ((ch = *s) != 0) {
             if (ch == 1)
                 s += 3;

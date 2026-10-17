@@ -559,9 +559,10 @@ s32 PolyBatcher::LoadTexturePages(const char *path)
                 iPage++;
                 texturePageCount++;
             }
-            /* the new HUD's PNG icons (src/engine/hud/hud_icons.cpp), read again every level: none, no page */
+            /* the new HUD's PNG icons (src/engine/hud/hud_icons.cpp), read again every level: none, no page. Filtered
+             * as the game's own pages are, so the icons look like the text beside them */
             if ((textures[iPage] = PolyBatcher_MakePortPage(renderer, HudIcons_BuildPage)) != 0) {
-                texStateFlags[iPage] = RSF_BLEND_ALPHA | RSF_TEXTURED;
+                texStateFlags[iPage] = RSF_BLEND_ALPHA | RSF_TEXTURED | RSF_FILTER_LINEAR;
                 g_hudIconPage = (s32)iPage;
                 iPage++;
                 texturePageCount++;

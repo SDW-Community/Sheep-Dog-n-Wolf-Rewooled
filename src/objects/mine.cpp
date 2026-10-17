@@ -732,7 +732,7 @@ void DefusableMine::DrawPanel()
                                      r + g_defuseButtonTable[q].y - (g_defusePadSprites[q].height >> 1), 0x808080, 0);*/
         /* the new prompts on top (src/engine/hud/hud_prompt.h): the key bound to this symbol, at its centre */
         HudPrompt_DrawAction(ICTX_DEFUSE, s_defuseActions[q], p + g_defuseButtonTable[q].x, r + g_defuseButtonTable[q].y,
-                             g_screenLayerBase + 6);
+                             g_screenLayerBase + 6, 1);
     }
     g_defusePanelSprite.DrawThunkAt(g_screenLayerBase + 9, 16, 32, 0x808080, 0);
     g_defusePanelSprite.DrawThunkAt(g_screenLayerBase + 9, p, 32, 0x808080, 4);

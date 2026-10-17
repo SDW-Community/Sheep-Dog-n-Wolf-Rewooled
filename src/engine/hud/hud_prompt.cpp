@@ -33,6 +33,7 @@ static const struct {
     HudIcon placeholder;
 } s_placeholders[] = {
     {ICTX_DEFUSE, HUDPROMPT_PAD, HUD_TEXT("●")},
+    {ICTX_DANCE, HUDPROMPT_PAD, HUD_TEXT("●")},
 };
 
 /* the label of a binding with no icon */
@@ -93,7 +94,7 @@ u8 HudPrompt_Label(u8 ctx, u8 action, char *out, int size)
     return HudPrompt_Binding(ctx, action, &b, &pad) && HudPrompt_BindingLabel(&b, out, size);
 }
 
-u8 HudPrompt_DrawAction(u8 ctx, u8 action, s32 x, s32 y, u32 *layer)
+u8 HudPrompt_DrawAction(u8 ctx, u8 action, s32 x, s32 y, u32 *layer, u8 animate)
 {
     InputBindingRef b;
     HudIcon label;
@@ -112,5 +113,5 @@ u8 HudPrompt_DrawAction(u8 ctx, u8 action, s32 x, s32 y, u32 *layer)
         label.value = text;
         icon = &label;
     }
-    return HudIcons_Draw(icon, (float)x, (float)y, HUDPROMPT_SIZE, HUDPROMPT_RGB, layer);
+    return HudIcons_Draw(icon, (float)x, (float)y, HUDPROMPT_SIZE, HUDPROMPT_RGB, layer, animate);
 }

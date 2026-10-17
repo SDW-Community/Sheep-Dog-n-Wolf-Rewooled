@@ -10,13 +10,18 @@
  * packed in rows ("shelves", the tallest first) into one 1024 x 1024 page with a 2-pixel gap. A PNG that is missing,
  * or does not fit what is left, is left out: it is not ready, and the prompt falls back.
  *
+ * An animation (HUD_ANIM) is HUDICON_FRAMES PNGs, a cell each; the frame drawn is the text's button-glyph blink
+ * (Text_BlinkFrame), so the icons and the old glyphs change together; drawn still, it is the first frame.
+ *
  * Uses the HUD font and hud_draw (the screen and the disk); nothing of the old engine.
  */
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "sdw_types.h"
 #include "sdw_hud_icons.h" /* g_sdwHudIcons[]: the PNGs of res/hud/icons/ (generated in the build folder) */
+#include "../text.h"
 #include "hud_draw.h"
 #include "hud_font.h"
 #include "hud_button_icons.h"
@@ -24,13 +29,14 @@
 
 #define HUDICONS_ATLAS 1024
 #define HUDICONS_GAP 2
-#define HUDICONS_MAX 128
+#define HUDICONS_MAX 192
+#define HUDICONS_PATH 96
 
 s32 g_hudIconPage = -1;
 
 /* the images in this level's atlas */
 static struct HudIconCell {
-    const char *path;
+    char path[HUDICONS_PATH];
     s32 w, h; /* in pixels */
     HudRect uv;
 } s_cells[HUDICONS_MAX];
@@ -43,6 +49,15 @@ static const HudIconCell *HudIcons_Cell(const char *path)
         if (!strcmp(s_cells[i].path, path))
             return &s_cells[i];
     return 0;
+}
+
+/* the PNG of an image icon, or of an animation's frame (0 = the first) */
+static const char *HudIcons_Path(const HudIcon *icon, u32 frame, char *buf, int size)
+{
+    if (icon->kind != HUDICON_ANIM)
+        return icon->value;
+    snprintf(buf, size, "%s_%u.png", icon->value, (unsigned)frame + 1);
+    return buf;
 }
 
 /* an icon's PNG: the data folder's override, else the embedded copy; 0 when neither exists */
@@ -70,18 +85,22 @@ u8 *HudIcons_BuildPage(u32 *width, u32 *height)
     u32 i, n = 0, count = HudButtonIcons_Count();
     s32 x = 0, y = 0, shelf = 0, row;
     s_cellCount = 0;
-    /* each PNG the table names, once */
-    for (i = 0; i < count && n < HUDICONS_MAX; i++) {
+    /* each PNG the table names (each frame of an animation), once */
+    for (i = 0; i < count; i++) {
         const HudIcon *icon = HudButtonIcons_Icon(i);
-        u32 k;
-        if (icon->kind != HUDICON_IMAGE)
+        u32 f, k;
+        if (icon->kind != HUDICON_IMAGE && icon->kind != HUDICON_ANIM)
             continue;
-        for (k = 0; k < n && strcmp(s_cells[k].path, icon->value); k++)
-            ;
-        if (k < n)
-            continue;
-        s_cells[n].path = icon->value;
-        n++;
+        for (f = 0; f < (icon->kind == HUDICON_ANIM ? HUDICON_FRAMES : 1u) && n < HUDICONS_MAX; f++) {
+            char buf[HUDICONS_PATH];
+            const char *path = HudIcons_Path(icon, f, buf, sizeof(buf));
+            for (k = 0; k < n && strcmp(s_cells[k].path, path); k++)
+                ;
+            if (k < n)
+                continue;
+            snprintf(s_cells[n].path, sizeof(s_cells[n].path), "%s", path);
+            n++;
+        }
     }
     for (i = 0; i < n; i++) { /* their sizes first, to pack the tallest first; the pixels are read again below */
         s32 w = 0, h = 0;
@@ -134,24 +153,22 @@ u8 HudIcons_IsReady(const HudIcon *icon)
         return 0;
     if (icon->kind == HUDICON_TEXT)
         return 1;
-    return g_hudIconPage >= 0 && HudIcons_Cell(icon->value) != 0;
+    char buf[HUDICONS_PATH];
+    return g_hudIconPage >= 0 && HudIcons_Cell(HudIcons_Path(icon, 0, buf, sizeof(buf))) != 0;
 }
 
-u8 HudIcons_Draw(const HudIcon *icon, float x, float y, float size, u32 rgb, u32 *layer)
+u8 HudIcons_Draw(const HudIcon *icon, float x, float y, float size, u32 rgb, u32 *layer, u8 animate)
 {
-    const HudIconCell *cell;
-    HudRect rect;
-    float w;
+    const HudIconCell *cell = 0;
+    char buf[HUDICONS_PATH];
     if (!HudIcons_IsReady(icon))
         return 0;
     if (icon->kind == HUDICON_TEXT)
         return HudFont_Draw(icon->value, x, y, size, rgb, layer, HUDFONT_CENTRE);
-    cell = HudIcons_Cell(icon->value);
-    w = size * cell->w / cell->h;
-    rect.x0 = x - w / 2;
-    rect.x1 = x + w / 2;
-    rect.y0 = y - size / 2;
-    rect.y1 = y + size / 2;
-    HudDraw_TexturedRect(g_hudIconPage, &rect, &cell->uv, 0xffffff, layer);
+    if (icon->kind == HUDICON_ANIM && animate)
+        cell = HudIcons_Cell(HudIcons_Path(icon, Text_BlinkFrame(), buf, sizeof(buf)));
+    if (!cell) /* a still image, an animation drawn still, or a frame that is missing: the first */
+        cell = HudIcons_Cell(HudIcons_Path(icon, 0, buf, sizeof(buf)));
+    HudDraw_Image(g_hudIconPage, x, y, size, cell->w, cell->h, &cell->uv, layer);
     return 1;
 }
