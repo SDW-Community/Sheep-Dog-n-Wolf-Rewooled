@@ -15,13 +15,18 @@ extern s32 g_dtMs;
 
 #define SDW_ABS(v) ((v) >= 0 ? (v) : -(v))
 
+/* Rewooled: the shortest time Math_ApproachAngle works out "the rate that reaches the target" over: 0, so one frame, as the
+ * original did, for every caller but Math_ApproachAngleGoal (below). */
+static s32 s_approachMinHorizon = 0;
+
 /* signed 16-bit angle inputs/return; 32-bit angular rate. */
 s16 Math_ApproachAngle(s16 cur, s16 target, s32 *rate, s32 limit, s32 accel, s32 decel, s32 force_min_step)
 {
     struct {
         s32 desired_rate, rate_step, step;
     } work;
-    work.desired_rate = ((s16)((s16)((target - cur + 2048) & 4095) - 2048) << 12) / g_dt;
+    work.desired_rate = ((s16)((s16)((target - cur + 2048) & 4095) - 2048) << 12) /
+                        (g_dt > s_approachMinHorizon ? g_dt : s_approachMinHorizon);
     work.step = SDW_ABS(work.desired_rate);
     if (work.step <= (limit << 1)) {
         if (work.step > 1)
@@ -33,7 +38,7 @@ s16 Math_ApproachAngle(s16 cur, s16 target, s32 *rate, s32 limit, s32 accel, s32
         work.rate_step = accel;
     else
         work.rate_step = decel;
-    work.rate_step = (work.rate_step * g_dt) >> 12;
+    work.rate_step = (work.rate_step * g_dt + g_dtDither) >> 12; /* Rewooled: dithered, as Math_ApproachLinear's; truncated, it is ZERO below 4096 / g_dt and the turn rate cannot change */
     if (SDW_ABS(work.desired_rate - *rate) <= work.rate_step) {
         if (work.desired_rate > limit)
             work.desired_rate = limit;
@@ -50,16 +55,45 @@ s16 Math_ApproachAngle(s16 cur, s16 target, s32 *rate, s32 limit, s32 accel, s32
                 work.desired_rate = -limit;
         }
     }
-    work.step = (work.desired_rate * g_dt) >> 12;
+    work.step = (work.desired_rate * g_dt + g_dtDither) >> 12; /* Rewooled: dithered; the arithmetic shift rounded a left turn and a right turn differently */
     if (force_min_step && work.step == 0 && work.desired_rate != 0) {
-        if (work.desired_rate >= 0)
-            work.step = 1;
-        else
-            work.step = -1;
+        /* Rewooled: the original moved a whole unit EVERY FRAME here (to finish an approach). A unit a frame is a rate that
+         * grows with the frame rate: 60 units a second at 60 fps, 300 at 300 fps. For a small difference the camera's auto
+         * turn has no other speed (its limit is proportional to the difference, and rounds to nothing), so the camera lined
+         * up with the way the wolf was walking five times as fast at 300 fps as at 60. The minimum is now what it was at
+         * 60 fps, as a rate, 60 units a second (dithered: a whole unit most frames at 60 fps, one in five at 300), and never
+         * more than the angle still to go. */
+        s32 minStep = (60 * g_dt + g_dtDither) >> 12;
+        s32 left = (s16)((s16)((target - cur + 2048) & 4095) - 2048);
+        if (minStep > SDW_ABS(left))
+            minStep = SDW_ABS(left);
+        work.step = work.desired_rate >= 0 ? minStep : -minStep;
     }
     target = (s16)((cur + work.step) & 4095);
     *rate = work.desired_rate;
     return target;
+}
+
+/* Rewooled: Math_ApproachAngle for a target that is a fixed GOAL, such as the camera's snap-yaw points.
+ *
+ * The rate that would reach the target in ONE FRAME is what the routine brakes by (half of it is the speed limit near the
+ * target), so how it braked depended on the frame rate. At 60 fps the rate for the last unit of angle is 60 units/s, which the
+ * deceleration limit can follow; at 300 fps it is 300, which it cannot (shedding it takes about 15 frames), so a camera easing
+ * onto a snap point slid through it still turning, the snap rule ("the snap point is behind, the camera is moving forward: go
+ * on to the next one") sent it on, and on again: it missed the point at 144 fps and above and spun at 200 to 300.
+ * Here that rate is worked out over at least a 60 fps frame (68 units of time), so it brakes as it does at 60 fps at any frame
+ * rate; at 60 fps and slower this is exactly Math_ApproachAngle.
+ *
+ * It is NOT for a target that is only a frame or so ahead ("where I am plus this frame's stick movement", as manual rotation
+ * and the automatic turns make): those rely on the one-frame rate being the speed they want, and would turn at a fraction
+ * of it, 20% at 300 fps. */
+s16 Math_ApproachAngleGoal(s16 cur, s16 target, s32 *rate, s32 limit, s32 accel, s32 decel, s32 force_min_step)
+{
+    s16 result;
+    s_approachMinHorizon = 68;
+    result = Math_ApproachAngle(cur, target, rate, limit, accel, decel, force_min_step);
+    s_approachMinHorizon = 0;
+    return result;
 }
 
 /* step uses accel when target >= cur, decel otherwise; it is not a speed-magnitude comparison.
@@ -148,12 +182,13 @@ s32 Math_ApproachValue(s32 cur, s32 target, s32 *vel, s32 maxRate, s32 accel, s3
             maxRate = dist;
     }
     rate = Math_ApproachLinear(*vel, rate, maxRate, accel, decel);
-    target = cur + (rate * g_dt >> 12);
+    target = cur + ((rate * g_dt + g_dtDither) >> 12); /* Rewooled: dithered */
     *vel = rate;
     return target;
 }
 
-/* steps cur towards target by at most ratePerSec * g_dt / 4096 (truncated: zero below 4096 / g_dt). */
+/* steps cur towards target by at most ratePerSec * g_dt / 4096. Rewooled: rounded with g_dtDither; the original
+ * truncated it, which is zero below 4096 / g_dt, so at a high frame rate a slow step never moved at all. */
 s32 Math_StepTowards(s32 cur, s32 target, s32 ratePerSec)
 {
     s32 delta;
@@ -161,7 +196,7 @@ s32 Math_StepTowards(s32 cur, s32 target, s32 ratePerSec)
 
     delta = target - cur;
     if (delta != 0) {
-        step = ratePerSec * g_dt >> 12;
+        step = (ratePerSec * g_dt + g_dtDither) >> 12;
         if ((delta >= 0 ? delta : -delta) > step) {
             if (delta > 0)
                 delta = step;
@@ -181,7 +216,7 @@ s16 Math_StepAngleTowards(s16 cur, s16 target, s32 ratePerSec)
 
     delta = (s16)((s16)((target - cur + 0x800) & 0xfff) - 0x800);
     if (delta != 0) {
-        step = ratePerSec * g_dt >> 12;
+        step = (ratePerSec * g_dt + g_dtDither) >> 12;
         if ((delta >= 0 ? delta : -delta) > step) {
             if (delta > 0)
                 delta = step;
@@ -267,7 +302,7 @@ u8 PathFollower::Step()
 {
     Lerp_SetVecTarget(&PF_POINT(toIdx));
     Vec3s_LerpToTarget(&pos, &PF_POINT(fromIdx), t);
-    t = t + rate * g_dtMs / 1024;
+    t = t + (s32)((((s64)rate * g_dt * 1000 / 1024) + g_dtDither) >> 12); /* Rewooled: dithered, not truncated */
     if (t >= 0x1000) {
         if (toIdx == path->count - 1) {
             rate = 0;
@@ -302,7 +337,7 @@ u8 PathFollower::StepSmooth()
     b.y -= a.y;
     b.z -= a.z;
     heading = Math_RadiansToAngle4096((float)atan2((double)b.x, (double)b.z)) & 0xfff;
-    t = t + rate * g_dtMs / 1024;
+    t = t + (s32)((((s64)rate * g_dt * 1000 / 1024) + g_dtDither) >> 12); /* Rewooled: dithered, not truncated */
     if (t >= 0x1000) {
         if (toIdx == path->count - 1) {
             rate = 0;

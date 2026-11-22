@@ -10,6 +10,7 @@
  * */
 #include "sdw_enums.h"
 #include "wolf.h"
+extern s32 g_dtDither; /* time.cpp: Rewooled, rounds a frame-time step (see engine/approach.cpp) */
 
 /* climb-box direction (flags bits 27-30) -> heading / 0x200 */
 extern const u8 g_wolfClimbDirTable[] = {0, 2, 6, 0, 0, 1, 7, 0, 4, 3, 5, 0, 0, 0, 0, 0};
@@ -310,7 +311,7 @@ s32 Wolf::MoveTowardPoint(Vec3s *target, s16 facing, s32 useFacing)
     wantedDir = work.steerHeading;
     bounceSpeed = 0;
     work.maxSpeed = work.rec->maxSpeed;
-    work.frameStep = (s16)((work.maxSpeed * g_dt) / 4096);
+    work.frameStep = (s16)((work.maxSpeed * g_dt + 4095) >> 12); /* Rewooled: rounded up: a dithered step is this or one less */
     if (work.frameStep > work.distError) {
         work.s->vel.x = work.s->vel.y = work.s->vel.z = 0;
         Wolf_SurfaceVelocity(&work.s->vel, (flags & WOLF_FB_IN_SLIDE_ZONE) || (flags & WOLF_FB_FORCE_SLIDE),
@@ -592,6 +593,10 @@ s32 Wolf::ForcedHeadingGroundStep(s16 heading)
     return work.result;
 }
 
+extern s32 g_dtMs;
+/* Rewooled: milliseconds the climbing wolf has gone without moving (see ClimbStep). Reset whenever it moves, or has no speed. */
+static s32 s_climbStillMs = 0;
+
 /* climbing (state 0x3f: box = a CLIMBBOXES box, isClimbZone = 1; state 0x40: box = the box of the context
  * object +0x644, isClimbZone = 0). The facing turns to the wall heading: the climb box's direction bits (flags bits 27-30
  * through g_wolfClimbDirTable, x 0x200), or toward the top centre of the context box. The stick's own angle (no camera)
@@ -671,7 +676,18 @@ void Wolf::ClimbStep(Box *box, s32 isClimbZone)
         }
     }
     ApplyMove(&work.s->step, &work.s->rot, RESOLVE_SLIDE_ALL, &work.s->vel);
-    if (speed == 0 || (work.s->step.x | work.s->step.y | work.s->step.z) == 0) {
+    /* Rewooled: climbing is slow, 100 units a second, and the wolf moves in whole units: a frame at 300 fps is a third of
+     * a unit, so most frames of a wolf that is climbing perfectly well have no step at all. The original took a frame
+     * without a step to mean "stopped" (it never saw one at 60 fps, where a step is two units), and so at high frame rates
+     * switched between the idle and the climbing animations every frame, restarting the animation each time, so it never
+     * played: the climb looked very slow, and the idle sound kept starting and stopping. The wolf is now stopped when it has
+     * not moved for longer than a unit takes at its speed, and two frames more. A wolf held against the end of the climb
+     * zone still goes idle, a little later. */
+    if (speed == 0 || (work.s->step.x | work.s->step.y | work.s->step.z) != 0)
+        s_climbStillMs = 0;
+    else
+        s_climbStillMs += g_dtMs;
+    if (speed == 0 || s_climbStillMs > 34 + 1500 / SDW_ABS(speed)) {
         PlayLoopSound(SND_SCOCOLD);
         if (AnimId() != ACOYOT01_ANIM_CLIMB5)
             PlayAnim(ACOYOT01_ANIM_CLIMB5, 1, 1);
@@ -1057,7 +1073,7 @@ s32 Wolf::LaunchArcStep()
     work.s->step.y = 0;
     work.s->step.z = 0;
     work.s->target.z = pos.z;
-    work.onPath = launchPath.Step(work.s, g_dtMs >> 2);
+    work.onPath = launchPath.Step(work.s, (g_dt * 250 + g_dtDither) >> 12);
     if (work.onPath) {
         work.s->step.x = work.s->target.x - pos.x;
         work.s->step.y = work.s->target.y - pos.y;

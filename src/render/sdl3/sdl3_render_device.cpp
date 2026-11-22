@@ -221,6 +221,11 @@ struct Sdl3Texture {
     int dirty;         /* the texels changed since the last upload */
     int lockedToWrite; /* locked with write access: dirty at Unlock */
     u32 drawnInBatch;  /* the batch (Flush count) that last drew with it */
+    /* the sharp bilinear filter: gpu is then the texture enlarged gpuScale times, and src the texels as uploaded */
+    SDL_GPUTexture *src;
+    u32 gpuScale;      /* 0 or 1: gpu is the texture's own size */
+    int scalable;      /* made by CreateTexture (not the font, the white texel or a frame capture) */
+    int blitPending;   /* src was uploaded: gpu is made from it before the next draw */
 };
 
 /* texels to RGBA8, as Direct3D reads the three formats (565 has alpha 1) */
@@ -262,6 +267,79 @@ static void Sdl3_ConvertTexels(const Sdl3Texture *t, u8 *out)
     }
 }
 
+/* Sharp bilinear (g_textureFilterMode 2): a texture is kept on the GPU enlarged a whole number of times with
+ * nearest-neighbour, and sampled with the bilinear sampler. Every texel stays a sharp block, and only a band 1/scale of a
+ * texel wide is blended between neighbours, wherever the texture is shown. Not past SDL3_SHARP_MAX_SIZE, where the texture
+ * is large enough already. */
+#define SDL3_SHARP_SCALE 4
+#define SDL3_SHARP_MAX_SIZE 2048
+
+static u32 Sdl3_WantedScale(u32 w, u32 h)
+{
+    u32 side = w > h ? w : h, scale;
+    if (g_textureFilterMode != 2 || !side)
+        return 1;
+    scale = SDL3_SHARP_MAX_SIZE / side;
+    return scale > SDL3_SHARP_SCALE ? SDL3_SHARP_SCALE : (scale ? scale : 1);
+}
+
+static void Sdl3_FreeGpuTextures(SDL_GPUDevice *gpu, Sdl3Texture *t)
+{
+    if (t->gpu)
+        SDL_ReleaseGPUTexture(gpu, t->gpu); /* SDL keeps it until the submitted commands are done with it */
+    if (t->src)
+        SDL_ReleaseGPUTexture(gpu, t->src);
+    t->gpu = t->src = 0;
+}
+
+/* the GPU texture(s) for t (width, height set): one of its own size, or at a scale above 1 the enlarged one (a blit
+ * target) and the one of its own size that the texels are uploaded to */
+static int Sdl3_MakeGpuTextures(SDL_GPUDevice *gpu, Sdl3Texture *t, u32 scale)
+{
+    SDL_GPUTextureCreateInfo info;
+    SDL_zero(info);
+    info.type = SDL_GPU_TEXTURETYPE_2D;
+    info.format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+    info.usage = scale > 1 ? (SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET) : SDL_GPU_TEXTUREUSAGE_SAMPLER;
+    info.width = t->width * scale;
+    info.height = t->height * scale;
+    info.layer_count_or_depth = 1;
+    info.num_levels = 1;
+    t->gpu = t->src = 0;
+    if (!(t->gpu = SDL_CreateGPUTexture(gpu, &info)))
+        return 0;
+    if (scale > 1) {
+        info.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER;
+        info.width = t->width;
+        info.height = t->height;
+        if (!(t->src = SDL_CreateGPUTexture(gpu, &info))) {
+            SDL_ReleaseGPUTexture(gpu, t->gpu);
+            t->gpu = 0;
+            return 0;
+        }
+    }
+    t->gpuScale = scale;
+    return 1;
+}
+
+/* the same for a texture that already has them, at another scale: the new ones replace the old, and are uploaded again */
+static int Sdl3_RemakeGpuTextures(SDL_GPUDevice *gpu, Sdl3Texture *t, u32 scale)
+{
+    Sdl3Texture fresh;
+    SDL_zero(fresh);
+    fresh.width = t->width;
+    fresh.height = t->height;
+    if (!Sdl3_MakeGpuTextures(gpu, &fresh, scale))
+        return 0;
+    Sdl3_FreeGpuTextures(gpu, t);
+    t->gpu = fresh.gpu;
+    t->src = fresh.src;
+    t->gpuScale = fresh.gpuScale;
+    t->blitPending = 0;
+    t->dirty = 1;
+    return 1;
+}
+
 /* ---- recorded draws ---- */
 
 /* pipeline key bits */
@@ -272,7 +350,8 @@ enum {
     PK_DST_SHIFT = 6, /* 4 bits */
     PK_ZTEST = 1 << 10,
     PK_ZWRITE = 1 << 11,
-    PK_COUNT = 1 << 12,
+    PK_SUBTRACT = 1 << 12, /* the colour is subtracted: destination - source (RSF_BLEND_SUB) */
+    PK_COUNT = 1 << 13,
 };
 
 struct Sdl3PsParams {
@@ -291,6 +370,7 @@ struct Sdl3Draw {
 /* the Direct3D 7 state the game changes */
 struct Sdl3State {
     int blend;
+    int subtract; /* with blend: destination - source, not source + destination */
     u32 srcBlend, dstBlend;
     int alphaTest, zEnable, zWrite, specular, fog, linear;
     u32 cull;
@@ -794,6 +874,12 @@ void Sdl3RenderDevice::SetStateFlags(u32 flags)
         state.srcBlend = D3D_BLEND_INVSRCALPHA;
         state.dstBlend = D3D_BLEND_ONE;
     }
+    if (flags & RSF_BLEND_SUB) {
+        state.blend = 1;
+        state.srcBlend = D3D_BLEND_ONE;
+        state.dstBlend = D3D_BLEND_ONE;
+        state.subtract = 1;
+    }
     if (flags & RSF_ALPHATEST)
         state.alphaTest = 1;
     if (flags & RSF_SPECULAR)
@@ -821,6 +907,8 @@ void Sdl3RenderDevice::ClearStateFlags(u32 flags)
 {
     if ((flags & RSF_BLEND_ALPHA) || (flags & RSF_BLEND_ADD))
         state.blend = 0;
+    if (flags & RSF_BLEND_SUB)
+        state.blend = state.subtract = 0;
     if (flags & RSF_ALPHATEST)
         state.alphaTest = 0;
     if (flags & RSF_SPECULAR)
@@ -959,6 +1047,8 @@ long Sdl3RenderDevice::DrawPrimitive(u32 primitive, u32 fvf, void *data, u32 cou
     key = (lines ? PK_LINES : 0) | (state.zEnable ? PK_ZTEST : 0) | (state.zEnable && state.zWrite ? PK_ZWRITE : 0);
     if (state.blend)
         key |= PK_BLEND | ((state.srcBlend & 15) << PK_SRC_SHIFT) | ((state.dstBlend & 15) << PK_DST_SHIFT);
+    if (state.blend && state.subtract)
+        key |= PK_SUBTRACT;
     texture = state.texture ? state.texture : &white;
     SDL_zero(ps);
     ps.fogColor[0] = ((state.fogColor >> 16) & 0xff) / 255.0f;
@@ -1081,6 +1171,8 @@ SDL_GPUGraphicsPipeline *Sdl3RenderDevice::Pipeline(u32 key)
         target.blend_state.src_color_blendfactor = target.blend_state.src_alpha_blendfactor = src;
         target.blend_state.dst_color_blendfactor = target.blend_state.dst_alpha_blendfactor = dst;
         target.blend_state.color_blend_op = target.blend_state.alpha_blend_op = SDL_GPU_BLENDOP_ADD;
+        if (key & PK_SUBTRACT) /* destination * 1 - source * 1, clamped at 0 */
+            target.blend_state.color_blend_op = SDL_GPU_BLENDOP_REVERSE_SUBTRACT;
     }
     info.target_info.color_target_descriptions = &target;
     info.target_info.num_color_targets = 1;
@@ -1100,6 +1192,17 @@ void Sdl3RenderDevice::Flush()
     u32 i, uploadBytes = vertexCount * sizeof(Sdl3Vertex), vertexBytes = uploadBytes;
     int uploads = 0;
 
+    /* the sharp filter keeps the textures enlarged on the GPU: choosing it in the menu, or another filter after it,
+     * makes them again (the texels are on the CPU still, and are uploaded again) */
+    for (i = 0; i < textureCount; i++) {
+        Sdl3Texture *t = textures[i];
+        u32 scale;
+        if (!t->scalable)
+            continue;
+        scale = Sdl3_WantedScale(t->width, t->height);
+        if (scale != (t->gpuScale ? t->gpuScale : 1))
+            Sdl3_RemakeGpuTextures(gpu, t, scale);
+    }
     for (i = 0; i < textureCount; i++)
         if (textures[i]->dirty) {
             uploadBytes += textures[i]->width * textures[i]->height * 4;
@@ -1172,15 +1275,36 @@ void Sdl3RenderDevice::Flush()
             SDL_zero(to);
             from.transfer_buffer = transfer;
             from.offset = offset;
-            to.texture = t->gpu;
+            to.texture = t->src ? t->src : t->gpu;
             to.w = t->width;
             to.h = t->height;
             to.d = 1;
             SDL_UploadToGPUTexture(copy, &from, &to, false);
+            if (t->src)
+                t->blitPending = 1;
             offset += t->width * t->height * 4;
             t->dirty = 0;
         }
         SDL_EndGPUCopyPass(copy);
+
+        /* the textures kept enlarged: made from the texels just uploaded, by an exact nearest-neighbour blit */
+        for (i = 0; i < textureCount; i++) {
+            Sdl3Texture *t = textures[i];
+            SDL_GPUBlitInfo blit;
+            if (!t->blitPending)
+                continue;
+            t->blitPending = 0;
+            SDL_zero(blit);
+            blit.source.texture = t->src;
+            blit.source.w = t->width;
+            blit.source.h = t->height;
+            blit.destination.texture = t->gpu;
+            blit.destination.w = t->width * t->gpuScale;
+            blit.destination.h = t->height * t->gpuScale;
+            blit.load_op = SDL_GPU_LOADOP_DONT_CARE;
+            blit.filter = SDL_GPU_FILTER_NEAREST;
+            SDL_BlitGPUTexture(cmd, &blit);
+        }
     }
 
     if (drawCount || clearColor || clearDepth) {
@@ -1236,7 +1360,7 @@ void Sdl3RenderDevice::Flush()
             if (d->texture != boundTexture || d->linear != boundLinear) {
                 SDL_GPUTextureSamplerBinding sampler;
                 sampler.texture = d->texture->gpu;
-                sampler.sampler = (d->linear && g_textureFilteringEnabled) ? linearSampler : pointSampler;
+                sampler.sampler = (d->linear && g_textureFilterMode != 0) ? linearSampler : pointSampler;
                 SDL_BindGPUFragmentSamplers(pass, 0, &sampler, 1);
                 boundTexture = d->texture;
                 boundLinear = d->linear;
@@ -1254,6 +1378,61 @@ void Sdl3RenderDevice::Flush()
     vertexCount = drawCount = 0;
     clearColor = clearDepth = 0;
     BeginBatch();
+}
+
+/* V-Sync (g_options.vsync). On, a frame waits for the display's refresh (the VSYNC present mode). Off, MAILBOX where the
+ * driver has it (the newest frame is shown at each refresh, with no tearing), else IMMEDIATE. Called after every frame;
+ * it acts only when the setting has changed. */
+static void Sdl3_UpdatePresentMode(SDL_GPUDevice *gpu, SDL_Window *window)
+{
+    static int applied = -1;
+    int vsync = g_options.vsync != 0;
+    SDL_GPUPresentMode mode = SDL_GPU_PRESENTMODE_VSYNC;
+
+    if (vsync == applied)
+        return;
+    applied = vsync;
+    if (!vsync) {
+        /* MAILBOX is not "no V-Sync": SDL's documentation has it wait for the vblank before it presents, and only replace a
+         * frame that is still waiting. On Vulkan the game can still render faster than the display; on Direct3D 12 the
+         * frames in flight fill up and the swapchain wait paces the game to the monitor's refresh rate while the window has
+         * focus (it ran uncapped only when another window was in front). Only IMMEDIATE presents at once there, at the cost
+         * of tearing, which is what turning V-Sync off asks for. */
+        const char *driver = SDL_GetGPUDeviceDriver(gpu);
+        int direct3d12 = driver && SDL_strcmp(driver, "direct3d12") == 0;
+        if (direct3d12 && SDL_WindowSupportsGPUPresentMode(gpu, window, SDL_GPU_PRESENTMODE_IMMEDIATE))
+            mode = SDL_GPU_PRESENTMODE_IMMEDIATE;
+        else if (SDL_WindowSupportsGPUPresentMode(gpu, window, SDL_GPU_PRESENTMODE_MAILBOX))
+            mode = SDL_GPU_PRESENTMODE_MAILBOX;
+        else if (SDL_WindowSupportsGPUPresentMode(gpu, window, SDL_GPU_PRESENTMODE_IMMEDIATE))
+            mode = SDL_GPU_PRESENTMODE_IMMEDIATE;
+    }
+    if (SDL_SetGPUSwapchainParameters(gpu, window, SDL_GPU_SWAPCHAINCOMPOSITION_SDR, mode))
+        SDL_Log("SheepD3D: V-Sync %s (present mode %s)", vsync ? "on" : "off",
+                mode == SDL_GPU_PRESENTMODE_VSYNC ? "vsync" : (mode == SDL_GPU_PRESENTMODE_MAILBOX ? "mailbox" : "immediate"));
+    else
+        SDL_Log("SheepD3D: V-Sync %s: %s", vsync ? "on" : "off", SDL_GetError());
+}
+
+/* FPS Limit (g_options.fpsLimit, 20..300): waits out what is left of each frame's time. Called at the end of every
+ * Present. A frame that ran long is not made up for by short ones after it. */
+static void Sdl3_LimitFrameRate()
+{
+    static Uint64 next = 0;
+    int fps = g_options.fpsLimit;
+    Uint64 interval, now;
+
+    if (fps <= 0 || fps > 300)
+        fps = 300;
+    else if (fps < 20)
+        fps = 20;
+    interval = 1000000000ull / (Uint64)fps;
+    now = SDL_GetTicksNS();
+    if (!next || now > next + interval)
+        next = now; /* the first frame, or more than a frame late */
+    next += interval;
+    if (now < next)
+        SDL_DelayPrecise(next - now);
 }
 
 /* the frame into the window (scaled, aspect kept), submitted; then the other frame is drawn into (a flip) */
@@ -1369,6 +1548,8 @@ long Sdl3RenderDevice::Present()
     current ^= 1;
     PerfOverlay_PresentEnd();
     ApplyRenderSettings();
+    Sdl3_UpdatePresentMode(gpu, window);
+    Sdl3_LimitFrameRate();
     return 0;
 }
 
@@ -1472,7 +1653,6 @@ void Sdl3RenderDevice::DrawPerfOverlay()
 s32 Sdl3RenderDevice::CreateTexture(u32 w, u32 h, u32 format, RdTexture **out, u32 *outWidth, u32 *outHeight)
 {
     Sdl3Texture *t;
-    SDL_GPUTextureCreateInfo info;
     *out = 0;
     if (format != TEXFMT_RGB565 && format != TEXFMT_ARGB1555 && format != TEXFMT_ARGB4444 && format != TEXFMT_RGBA8)
         return TEXRES_NO_PIXEL_FORMAT;
@@ -1487,23 +1667,15 @@ s32 Sdl3RenderDevice::CreateTexture(u32 w, u32 h, u32 format, RdTexture **out, u
         SDL_free(t);
         return TEXRES_OUT_OF_MEMORY;
     }
-    SDL_zero(info);
-    info.type = SDL_GPU_TEXTURETYPE_2D;
-    info.format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
-    info.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER;
-    info.width = w;
-    info.height = h;
-    info.layer_count_or_depth = 1;
-    info.num_levels = 1;
-    if (!(t->gpu = SDL_CreateGPUTexture(gpu, &info)) || !TrackTexture(t)) {
-        if (t->gpu)
-            SDL_ReleaseGPUTexture(gpu, t->gpu);
+    t->width = w;
+    t->height = h;
+    if (!Sdl3_MakeGpuTextures(gpu, t, Sdl3_WantedScale(w, h)) || !TrackTexture(t)) {
+        Sdl3_FreeGpuTextures(gpu, t);
         SDL_free(t->pixels);
         SDL_free(t);
         return TEXRES_OUT_OF_MEMORY;
     }
-    t->width = w;
-    t->height = h;
+    t->scalable = 1;
     t->format = format;
     t->dirty = 1;
     *out = (RdTexture *)t;
@@ -1574,7 +1746,7 @@ void Sdl3RenderDevice::ReleaseTexture(RdTexture *texture)
     if (state.texture == t)
         state.texture = 0;
     UntrackTexture(t);
-    SDL_ReleaseGPUTexture(gpu, t->gpu); /* SDL keeps it until the submitted commands are done with it */
+    Sdl3_FreeGpuTextures(gpu, t);
     SDL_free(t->pixels);
     SDL_free(t);
 }

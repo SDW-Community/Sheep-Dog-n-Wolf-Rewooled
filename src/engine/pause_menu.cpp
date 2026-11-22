@@ -111,7 +111,7 @@ static u8 g_pauseMeshOutlines = 1;   /* accepted outline setting; Done keeps the
 /* Rewooled Settings' languages while the page is open (langpack.h): saved by Done, dropped otherwise */
 static s32 g_pauseTextLanguage = 0;
 static s32 g_pauseVoiceLanguage = -1; /* -1: the text language's own voices */
-static u8 g_pauseTextureFiltering = 1; /* accepted texture filtering setting; Done keeps the preview */
+static u8 g_pauseTextureFilterMode = 1; /* accepted texture filter (0 nearest, 1 bilinear, 2 sharp bilinear); Done keeps the preview */
 s16 g_pauseResumeIndex = 0;          /* node index of "resume", where the cursor returns */
 u8 g_menuFooterStyle = 0;            /* which footer the menu draws */
 u8 g_menuFooterStylePrev = 0;        /* last frame's g_menuFooterStyle; nothing reads it */
@@ -202,6 +202,8 @@ static void PauseMenu_ItemVoiceLanguage(u8 msg, MenuPage *item);
 static void PauseMenu_ItemTextureFiltering(u8 msg, MenuPage *item);
 static void PauseMenu_ItemScreenPercent(u8 msg, MenuPage *item);
 static void PauseMenu_ItemAntiAliasing(u8 msg, MenuPage *item);
+static void PauseMenu_ItemFpsLimit(u8 msg, MenuPage *item);
+static void PauseMenu_ItemVSync(u8 msg, MenuPage *item);
 void PauseMenu_ItemDisplayDone(u8 msg, MenuPage *item);
 void PauseMenu_ItemControlDevice(u8 msg, MenuPage *item);
 void PauseMenu_ItemCameraSpeed(u8 msg, MenuPage *item);
@@ -270,7 +272,7 @@ inline ProgressOptionBits *Progress_Options()
 }
 
 /* a Yes/No setting stored as a one-byte REG_BINARY value in the "CfgGame" key; missing or invalid means Yes */
-static u8 PauseMenu_LoadBoolSetting(const char *name)
+static u8 PauseMenu_LoadBoolSetting(const char *name, u8 maxValue)
 {
     if (!Save_KeyExists("CfgGame"))
         return 1;
@@ -280,7 +282,7 @@ static u8 PauseMenu_LoadBoolSetting(const char *name)
     u8 enabled = 1;
     unsigned type = 0, size = sizeof(enabled);
     if (Save_QueryValue(key, name, &type, &enabled, &size) != SAVE_OK ||
-        type != 3 || size != sizeof(enabled) || enabled > 1)
+        type != 3 || size != sizeof(enabled) || enabled > maxValue)
         enabled = 1;
     Save_CloseKey(key);
     return enabled;
@@ -288,12 +290,12 @@ static u8 PauseMenu_LoadBoolSetting(const char *name)
 
 static u8 PauseMenu_LoadOutlineSetting()
 {
-    return PauseMenu_LoadBoolSetting("CelShadingOutlines");
+    return PauseMenu_LoadBoolSetting("CelShadingOutlines", 1);
 }
 
 static u8 PauseMenu_LoadTextureFilteringSetting()
 {
-    return PauseMenu_LoadBoolSetting("TextureFiltering");
+    return PauseMenu_LoadBoolSetting("TextureFiltering", 2); /* 0 and 1 are what the old Yes/No row saved */
 }
 
 /* per-level UI set-up, called once by Load_DAVnWAR: the pause box, the slider cursors' skins, the UI
@@ -304,7 +306,7 @@ void Menus_LoadLevelUi()
     u8 playerLang;
 
     g_meshOutlinesEnabled = g_pauseMeshOutlines = PauseMenu_LoadOutlineSetting();
-    g_textureFilteringEnabled = g_pauseTextureFiltering = PauseMenu_LoadTextureFilteringSetting();
+    g_textureFilterMode = g_pauseTextureFilterMode = PauseMenu_LoadTextureFilteringSetting();
     g_pauseFlag89 = 1;
     g_pauseSlidersShown = 0;
     PauseMenu_SetBox(0x1c0, 0xa0);
@@ -396,7 +398,7 @@ void PauseMenu_Exit()
 
     Menu_Close();
     g_meshOutlinesEnabled = g_pauseMeshOutlines;
-    g_textureFilteringEnabled = g_pauseTextureFiltering;
+    g_textureFilterMode = g_pauseTextureFilterMode;
     // Keep the existing music stream unless the sound mode disables it or it needs starting.
     if (g_pProgress->optionBits.soundMode != SOUNDMODE_ALL)
         g_pStreamPlayer->Halt();
@@ -768,7 +770,8 @@ void PauseMenu_Build()
     Menu_AddItems(rewooledPage, PauseMenu_ItemCameraSpeed, PauseMenu_ItemCameraAcceleration,
                   PauseMenu_ItemInvertCameraJoystick, PauseMenu_ItemMeshOutlines, PauseMenu_ItemTextLanguage,
                   PauseMenu_ItemVoiceLanguage, PauseMenu_ItemTextureFiltering, PauseMenu_ItemScreenPercent,
-                  PauseMenu_ItemAntiAliasing, PauseMenu_ItemRewooledDone, MENU_END);
+                  PauseMenu_ItemAntiAliasing, PauseMenu_ItemFpsLimit,
+                  PauseMenu_ItemVSync, PauseMenu_ItemRewooledDone, MENU_END);
 
     Menu_AddItems(bindPage, PauseMenu_ItemBindUp, PauseMenu_ItemBindRight, PauseMenu_ItemBindDown,
                   PauseMenu_ItemBindLeft, PauseMenu_ItemBindAction, PauseMenu_ItemBindJump,
@@ -816,7 +819,7 @@ static void PauseMenu_PageRewooledSettings(u8 msg, MenuPage *item)
             g_meshOutlinesEnabled = g_pauseMeshOutlines;
             g_pauseTextLanguage = LangPack_ChosenText();
             g_pauseVoiceLanguage = LangPack_ChosenVoices();
-            g_textureFilteringEnabled = g_pauseTextureFiltering;
+            g_textureFilterMode = g_pauseTextureFilterMode;
             break;
         case MENU_MSG_DRAW:
             Menu_Printf(item, TEXTALIGN_CENTER, "%s", PauseMenu_RewooledText(RWMENU_REWOOLED_SETTINGS));
@@ -1030,19 +1033,26 @@ static void PauseMenu_ItemTextLanguage(u8 msg, MenuPage *item)
     }
 }
 
-/* Preview texture filtering (Yes = the game's bilinear filtering, No = sharp, pixelated textures). */
+/* Preview the texture filter: Nearest (sharp, pixelated textures), Bilinear (the game's own), or Sharp Bilinear (pixelated
+ * textures whose texel edges are blended over a narrow band, so they do not stair-step). */
 static void PauseMenu_ItemTextureFiltering(u8 msg, MenuPage *item)
 {
+    static const char *const names[3] = {"Nearest", "Bilinear", "Sharp Bilinear"};
     switch (msg) {
         case MENU_MSG_DRAW_SELECTED:
             Menu_BuildNavFooter();
             break;
         case MENU_MSG_DRAW:
             Menu_Printf(item, TEXTALIGN_LEFT, "Texture Filtering");
-            Menu_Printf(item, TEXTALIGN_RIGHT, g_onOffNames[g_textureFilteringEnabled]);
+            Menu_Printf(item, TEXTALIGN_RIGHT, "%s", names[g_textureFilterMode % 3]);
+            break;
+        case MENU_MSG_LEFT:
+            g_textureFilterMode = (u8)((g_textureFilterMode + 2) % 3);
+            break;
+        case MENU_MSG_RIGHT:
+            g_textureFilterMode = (u8)((g_textureFilterMode + 1) % 3);
             break;
         case MENU_MSG_VALUE_CHANGED:
-            g_textureFilteringEnabled ^= 1;
             Ui_PlayMoveSound();
             break;
     }
@@ -1173,6 +1183,60 @@ static void PauseMenu_ItemAntiAliasing(u8 msg, MenuPage *item)
     }
 }
 
+/* FPS Limit: the frame rate the game is held to, 20 to 300 in steps of 5. It applies as soon as it is changed, and is saved.
+ * With V-Sync on, the display's refresh rate is a limit too: the lower of the two applies. */
+static void PauseMenu_ItemFpsLimit(u8 msg, MenuPage *item)
+{
+    char text[8];
+    int fps = g_options.fpsLimit;
+
+    if (fps < 20)
+        fps = fps <= 0 ? 300 : 20;
+    if (fps > 300)
+        fps = 300;
+    fps = (fps + 2) / 5 * 5; /* a value saved by hand rounds to a step */
+    switch (msg) {
+        case MENU_MSG_DRAW_SELECTED:
+            Menu_BuildNavFooter();
+            break;
+        case MENU_MSG_DRAW:
+            snprintf(text, sizeof(text), "%d", fps);
+            Menu_Printf(item, TEXTALIGN_LEFT, "FPS Limit");
+            Menu_Printf(item, TEXTALIGN_RIGHT, "%s", text);
+            break;
+        case MENU_MSG_LEFT:
+            g_options.fpsLimit = fps > 20 ? fps - 5 : 20;
+            break;
+        case MENU_MSG_RIGHT:
+            g_options.fpsLimit = fps < 300 ? fps + 5 : 300;
+            break;
+        case MENU_MSG_VALUE_CHANGED:
+            Options_SaveFrameSettings(g_options.fpsLimit, g_options.vsync);
+            Ui_PlayMoveSound();
+            break;
+    }
+}
+
+/* V-Sync: Yes, a frame waits for the display's refresh (no tearing, but never more frames than the display shows); No, it
+ * does not, so the FPS Limit can be above the refresh rate. It applies as soon as it is changed, and is saved. */
+static void PauseMenu_ItemVSync(u8 msg, MenuPage *item)
+{
+    switch (msg) {
+        case MENU_MSG_DRAW_SELECTED:
+            Menu_BuildNavFooter();
+            break;
+        case MENU_MSG_DRAW:
+            Menu_Printf(item, TEXTALIGN_LEFT, "V-Sync");
+            Menu_Printf(item, TEXTALIGN_RIGHT, g_onOffNames[g_options.vsync != 0]);
+            break;
+        case MENU_MSG_VALUE_CHANGED:
+            g_options.vsync = g_options.vsync ? 0 : 1;
+            Options_SaveFrameSettings(g_options.fpsLimit, g_options.vsync);
+            Ui_PlayMoveSound();
+            break;
+    }
+}
+
 /* "Done" keeps the display settings. */
 void PauseMenu_ItemDisplayDone(u8 msg, MenuPage *item)
 {
@@ -1211,13 +1275,13 @@ static void PauseMenu_ItemRewooledDone(u8 msg, MenuPage *item)
             LangPack_ChooseVoices(g_pauseVoiceLanguage);
             if (textChanged && g_pauseTextLanguage != LangPack_ActiveText())
                 Menu_ShowMessageBox(PauseMenu_RewooledText(RWMENU_TEXT_LANGUAGE_SAVED), TEXTALIGN_CENTER, 2500);
-            g_pauseTextureFiltering = g_textureFilteringEnabled;
+            g_pauseTextureFilterMode = g_textureFilterMode;
             SaveKey *key = Save_OpenKey("CfgGame");
             if (key) {
                 Save_SetValue(key, "CelShadingOutlines", 3 /* REG_BINARY */,
                               &g_pauseMeshOutlines, sizeof(g_pauseMeshOutlines));
                 Save_SetValue(key, "TextureFiltering", 3 /* REG_BINARY */,
-                              &g_pauseTextureFiltering, sizeof(g_pauseTextureFiltering));
+                              &g_pauseTextureFilterMode, sizeof(g_pauseTextureFilterMode));
                 Save_CloseKey(key);
             }
             /* an unsupported anti-aliasing choice (greyed out in its row) becomes the best supported one */

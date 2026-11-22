@@ -96,6 +96,7 @@ struct CamResetPositions { /* the positions Camera_ResetMotion / Camera_Reset se
 #include "../engine/sound_mgr.h"
 extern u8 g_sharedScratch[]; /* C++ linkage, as the rest of the game declares it */
 extern s32 g_dt;
+extern s32 g_dtDither; /* time.cpp: Rewooled, rounds a frame-time step (see engine/approach.cpp) */
 extern s32 g_dtMs;
 extern u32 g_gameFlags;
 extern u32 g_gameTime; /* u32, as Time defines it */
@@ -239,6 +240,8 @@ u8 g_camSpeedSetting = CAMERA_CONTROL_CENTRE;
 u8 g_camAccelerationSetting = CAMERA_CONTROL_CENTRE;
 u8 g_camInvertJoystick = 0;
 static u8 s_camManualYaw = 0;     /* set by Camera_OnManualRotate, consumed by the next Camera_SmoothToDesired */
+static u8 s_camSnapGoal = 0;      /* Rewooled: the yaw target is a snap-yaw point, a fixed goal; consumed by the next Camera_SmoothToDesired */
+static s8 s_camSnapKick = 0;      /* Rewooled: -1 or +1 on the frame the turn-camera button is pressed in a snap-yaw zone (Camera_UpdateFollow) */
 static u8 s_camManualPitch = 0;
 
 /* Each half of the slider is linear, with the original value exactly at its centre. */
@@ -253,7 +256,7 @@ static s32 Camera_ScaleControl(s32 value, u8 setting, s32 maxScale)
 static s32 Camera_ManualTurnStep(s32 input, s32 speed, s32 factor)
 {
     speed = Camera_ScaleControl(speed, g_camSpeedSetting, 2 * 0x1000);
-    return (s32)((s64)input * g_dt * speed * factor >> 20);
+    return (s32)(((s64)input * g_dt * speed * factor + ((s64)g_dtDither << 8)) >> 20);
 }
 
 static void Camera_LoadControlSettings()
@@ -1081,11 +1084,16 @@ void Camera_SmoothToDesired(Camera *cam, Vec3s *angles, const s32 *speeds, s16 *
         } else {
             angles->x = Math_ApproachAngle(cam->rot.x, angles->x, &g_camPitchVel, w.pitchSpeed << w.shift, w.pitchAccel,
                                            w.pitchAccel, 1);
-            angles->y = Math_ApproachAngle(cam->rot.y, angles->y, &g_camYawVel, w.yawSpeed << w.shift, w.yawAccel,
-                                           w.yawDecel, 1);
+            if (s_camSnapGoal) /* a snap-yaw point: brake as at 60 fps (see Math_ApproachAngleGoal) */
+                angles->y = Math_ApproachAngleGoal(cam->rot.y, angles->y, &g_camYawVel, w.yawSpeed << w.shift, w.yawAccel,
+                                                   w.yawDecel, 1);
+            else
+                angles->y = Math_ApproachAngle(cam->rot.y, angles->y, &g_camYawVel, w.yawSpeed << w.shift, w.yawAccel,
+                                               w.yawDecel, 1);
             angles->z = Math_ApproachAngle(cam->rot.z, angles->z, &g_camRollVel, speeds[2] << w.shift, w.rollAccel,
                                            w.rollAccel, 1);
         }
+        s_camSnapGoal = 0;
         if (angles->x > 0x800) {
             if (angles->x < 0xc00)
                 angles->x = 0xc00;
@@ -1341,6 +1349,7 @@ void Camera_SolveCollision(Camera *cam, Vec3s *angles, s16 distance, s32 enabled
         u16 unuseda;
         s32 modeDistance, snapYaw;
     } w;
+    Vec3s desiredEye; /* Rewooled: the eye as first placed along the smoothed angles, to see whether collision moved it */
     w.recalculate = 0;
     w.verticalBlocked = 0;
     w.foundClear = 0;
@@ -1442,6 +1451,7 @@ void Camera_SolveCollision(Camera *cam, Vec3s *angles, s16 distance, s32 enabled
         w.eye.y = maxVert;
         w.recalculate = 1;
     }
+    desiredEye = w.eye;
     if (w.autoEnabled) {
         if (g_camPitchAdjTimerMs > 0)
             g_camPitchAdjTimerMs -= (s16)g_dtMs;
@@ -1550,7 +1560,14 @@ void Camera_SolveCollision(Camera *cam, Vec3s *angles, s16 distance, s32 enabled
             w.eye.x = w.delta.x + cam->pos.x;
             w.eye.y = w.delta.y + cam->pos.y;
             w.eye.z = w.delta.z + cam->pos.z;
-            w.recalculate = 1;
+            /* Rewooled: the original always converted the eye back into angles here (Camera_EyeToAngles). The eye is a
+             * whole-number position, so that conversion rounds the pitch and the distance by up to a unit; they feed the
+             * next frame's smoothing, and while the camera turns (the eye moving sideways, its rounding changing every
+             * frame) the pitch flickers by a unit or more and the distance wanders: a vertical vibration in the third
+             * person view, worse at high frame rates. When nothing moved the eye the smoothed angles and distance are
+             * exactly what it was placed with, so they are kept. */
+            if (w.eye.x != desiredEye.x || w.eye.y != desiredEye.y || w.eye.z != desiredEye.z)
+                w.recalculate = 1;
             g_camFlags.tooFarCut = 0;
             g_camZoomOut -= 10;
             if (g_camZoomOut < 0)
@@ -1881,7 +1898,7 @@ void Camera_UpdateSamChase(Camera *camera, Pad *pad)
         }
         if (w.side)
             Camera_OnManualRotate(w.side);
-        w.side += ((g_camAutoYawRate << 8) * g_dt) >> 20;
+        w.side += (((g_camAutoYawRate << 8) * g_dt) + (g_dtDither << 8)) >> 20;
         w.distance = camera->dist;
         if (g_camReqFlags.useYaw)
             w.angles.y = g_camReqRot.y;
@@ -1893,7 +1910,7 @@ void Camera_UpdateSamChase(Camera *camera, Pad *pad)
                 w.angles.x = g_camReqRot.x;
             else if (g_camPitchAdjState.state) {
                 w.closeDistance = camera->dist < 200;
-                w.angles.x = camera->rot.x + (g_camAutoPitchRate * g_dt >> 12);
+                w.angles.x = camera->rot.x + ((g_camAutoPitchRate * g_dt + g_dtDither) >> 12);
                 if (w.angles.x > 0x300)
                     w.angles.x = 0x300;
                 if (w.angles.x < g_camMinPitch)
@@ -1919,7 +1936,7 @@ void Camera_UpdateSamChase(Camera *camera, Pad *pad)
             }
         } else if (g_camAutoPitchRate) {
             if (camera->rot.x < 0x300)
-                w.angles.x = camera->rot.x + (g_camAutoPitchRate * g_dt >> 12);
+                w.angles.x = camera->rot.x + ((g_camAutoPitchRate * g_dt + g_dtDither) >> 12);
         } else
             w.angles.x = camera->rot.x;
         if (w.side)
@@ -2105,15 +2122,19 @@ void Camera_UpdateFollow(Camera *camera, Pad *pad)
     w.snap = g_camReqFlags.snapYaw || (w.restrictEnabled && w.restriction->flags.snapYaw);
     w.smooth = g_camFlags.smooth;
     w.side = 0;
+    s_camSnapKick = 0;
     if (!w.forbidPad) {
         if (pad->cur.typeLen.type == PADTYPE_ANALOG)
             Pad_StickToDeadzonedAxes(pad->cur.rightX, pad->cur.rightY, &w.side, &w.vertical);
         if (w.side == 0) {
             if (w.snap) {
-                if (!(pad->cur.buttons & ~g_padMasks[4]) && (pad->prev.buttons & ~g_padMasks[4]))
+                if (!(pad->cur.buttons & ~g_padMasks[4]) && (pad->prev.buttons & ~g_padMasks[4])) {
                     w.side = -256;
-                else if (!(pad->cur.buttons & ~g_padMasks[5]) && (pad->prev.buttons & ~g_padMasks[5]))
+                    s_camSnapKick = -1;
+                } else if (!(pad->cur.buttons & ~g_padMasks[5]) && (pad->prev.buttons & ~g_padMasks[5])) {
                     w.side = 256;
+                    s_camSnapKick = 1;
+                }
             } else {
                 if (!(pad->cur.buttons & ~g_padMasks[4])) {
                     if (!(pad->cur.buttons & ~g_padMasks[5]))
@@ -2131,8 +2152,10 @@ void Camera_UpdateFollow(Camera *camera, Pad *pad)
         if (w.side > 0 && Vec3s_ManhattanDist(&camera->pos, &g_camBlockPosPos) < 80)
             w.side = 0;
         w.side = Camera_ManualTurnStep(w.side, w.speeds.y, 2);
+        if (w.side == 0)
+            s_camSnapKick = 0; /* the press was refused (the camera is against a wall that way) */
     }
-    w.side += (g_camAutoYawRate * 256 * g_dt) >> 20;
+    w.side += ((g_camAutoYawRate * 256 * g_dt) + (g_dtDither << 8)) >> 20;
     if (g_camReqDist)
         w.distance = g_camReqDist;
     else {
@@ -2166,7 +2189,7 @@ void Camera_UpdateFollow(Camera *camera, Pad *pad)
         if (g_camReqFlags.usePitch)
             w.angles.x = g_camReqRot.x;
         else if (g_camPitchAdjState.state) {
-            w.angles.x = camera->rot.x + (g_camAutoPitchRate * g_dt >> 12);
+            w.angles.x = camera->rot.x + ((g_camAutoPitchRate * g_dt + g_dtDither) >> 12);
             if (w.angles.x > 0x300)
                 w.angles.x = 0x300;
             if (w.angles.x < g_camMinPitch) {
@@ -2197,7 +2220,7 @@ void Camera_UpdateFollow(Camera *camera, Pad *pad)
         if (g_camAutoPitchRate) {
             w.angles.x = camera->rot.x;
             if (w.angles.x < 0x300)
-                w.angles.x += (s16)(g_camAutoPitchRate * g_dt >> 12);
+                w.angles.x += (s16)((g_camAutoPitchRate * g_dt + g_dtDither) >> 12);
         } else
             w.angles.x = camera->rot.x;
     }
@@ -2245,7 +2268,21 @@ void Camera_UpdateFollow(Camera *camera, Pad *pad)
         g_camTrajectory = 0;
         g_camTrajSegment = 0;
     }
+    s_camSnapGoal = w.snap != 0; /* the snap block above made the yaw target a snap-yaw point */
     Camera_SmoothToDesired(camera, &w.angles, &w.speeds.x, &w.distance, w.focal, &w.aim, w.trajectory);
+    if (s_camSnapKick != 0) {
+        /* Rewooled: in a snap-yaw zone the turn-camera button nudges the camera on one frame, and on the next the snap rule
+         * (above) sees it moving away from the snap point and carries it on to the next one. That only works if the camera
+         * really left the snap point on the press frame, and the original made sure of it at 60 fps and below: a step that
+         * rounded to nothing was forced up to a whole unit. Rounded to a RATE instead (see Math_ApproachAngle) it is nothing
+         * four frames in five at 300 fps, and the press then did nothing. So the press frame always moves at least a unit
+         * (and has some velocity for the snap rule to look at). Stick rotation does not come through here. */
+        if (w.angles.y == camera->rot.y)
+            w.angles.y = (camera->rot.y + s_camSnapKick) & 0xfff;
+        if (g_camYawVel == 0) /* only if the press gave it none; it keeps the momentum it has, as the original did */
+            g_camYawVel = s_camSnapKick;
+        s_camSnapKick = 0;
+    }
     if (w.restrictEnabled)
         w.maxVert = w.restriction->eyeVertMax;
     else
@@ -2513,7 +2550,7 @@ void Camera_UpdateOrbit_Unused(Camera *camera, Pad *pad)
         if (!(pad->cur.buttons & ~g_padMasks[5]))
             w.side += 256;
     }
-    w.side = (w.side * g_dt * w.speeds.y * 2) >> 20;
+    w.side = (w.side * g_dt * w.speeds.y * 2 + (g_dtDither << 8)) >> 20;
     w.distance = w.params->dist;
     w.angles.x = g_camMinPitch;
     w.angles.y = camera->rot.y;
@@ -2954,7 +2991,7 @@ void Camera_Update(Camera *camera, u8 mode, Pad *pad, Pad *mouse)
             Camera_UpdateDebugFreeCam(camera, pad, mouse);
             break;
         default:
-            w.step = g_dt * 960 >> 12;
+            w.step = (g_dt * 960 + g_dtDither) >> 12;
             if (mode != CAM_LOOK) {
                 if (!(pad->cur.buttons & ~(u16)~PAD_LEFT))
                     camera->pos.x -= w.step;
@@ -3113,18 +3150,30 @@ void Camera_InitUnderwaterOverlay()
         }
     }
 }
+
+/* The underwater filter, as the PlayStation's: a colour subtracted from the whole picture, so it darkens and takes the
+ * red and green out of it without lifting the darks or hiding the detail. Measured against a PlayStation frame of the
+ * same place: it takes about 42 off red, 28 off green and 40 off blue. To change it: the colour below, 0x00RRGGBB, is
+ * what is taken off each channel (0..255); a darker, stronger filter has bigger numbers. */
+#define UNDERWATER_SUBTRACT_COLOR 0x002a1c28u
+
+/* set while the camera is under water; Camera_DrawUnderwaterFilter, which the poly batcher calls once the rest of the
+ * frame is drawn, draws the filter and clears it */
+static s32 g_uwFilterActive = 0;
+
+void Camera_DrawUnderwaterFilter()
+{
+    if (!g_uwFilterActive)
+        return;
+    g_uwFilterActive = 0;
+    Draw2D_FlatRect_Immediate(g_screen.Draw2D_LayerToZ(g_screenLayerBase + 6), 0, 0, g_pViewFrustum->viewportWidth,
+                              g_pViewFrustum->viewportHeight, RSF_BLEND_SUB, UNDERWATER_SUBTRACT_COLOR);
+}
+
 void Camera_UpdateUnderwater()
 {
-    float depth;
     if (Camera_WaterZones(0)->FindContaining(&g_camera.pos)) {
-        Camera_InitUnderwaterOverlay();
-        if (g_uwOverlayReady == 1) {
-            depth = g_screen.Draw2D_LayerToZ(g_screenLayerBase + 6);
-            Draw2D_TexRect(depth, 0, 0, g_pViewFrustum->viewportWidth, g_pViewFrustum->viewportHeight,
-                           g_uwOverlayTexPage, g_uwOverlayUV[0], g_uwOverlayUV[1], g_uwOverlayColor, g_uwOverlayUV[0],
-                           g_uwOverlayUV[3], g_uwOverlayColor, g_uwOverlayUV[2], g_uwOverlayUV[1], g_uwOverlayColor,
-                           g_uwOverlayUV[2], g_uwOverlayUV[3], g_uwOverlayColor);
-        }
+        g_uwFilterActive = 1; /* Rewooled: drawn at the end of the frame, replacing the textured overlay of the original */
         if (!g_camUnderwaterSnd || !Sound_IsPlaying(g_camUnderwaterSnd))
             g_camUnderwaterSnd = Sound_Play(SND_UNDERWATER, &g_camera, 255, SNDF_LOOP | SNDF_NO_RETRIGGER, 4096);
     } else if (g_camUnderwaterSnd) {
